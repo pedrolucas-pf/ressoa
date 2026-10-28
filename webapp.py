@@ -3,6 +3,7 @@ import json
 import logging
 import mimetypes
 import os
+from time import perf_counter
 from contextlib import nullcontext
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -32,6 +33,7 @@ class Application:
         self.db=Database(source)
 
     def __call__(self, env, start_response):
+        started = perf_counter()
         headers = [('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'strict-origin-when-cross-origin'),
                    ('X-Frame-Options', 'DENY'), ('Cache-Control', 'no-store')]
         if self.production:
@@ -54,6 +56,7 @@ class Application:
             body = json.dumps(body, ensure_ascii=False, allow_nan=False).encode('utf-8')
             headers.append(('Content-Type', 'application/json; charset=utf-8'))
         headers.append(('Content-Length', str(len(body))))
+        headers.append(('Server-Timing', f'app;dur={(perf_counter()-started)*1000:.1f}'))
         start_response(f'{status} {HTTPStatus(status).phrase}', headers)
         return [] if env.get('REQUEST_METHOD') == 'HEAD' else [body]
 

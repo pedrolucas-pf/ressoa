@@ -1,11 +1,16 @@
 import { tracks, musicDetails, registerTrack, resetCatalog } from './catalog-store.js';
 
 let snapshot = null;
+let confirmed = null;
 const values = new Map();
 let queue = Promise.resolve();
 let pending = 0;
+let mutationRevision = 0, accountRevision = 0;
+const actions = new Map();
+const actionJobs = new Set();
 export const getAccount = () => snapshot;
 export const busy = () => pending > 0;
+export const actionPending = (kind, target) => actions.has(`${kind}:${target}`);
 export const readAccount = (key, fallback) => values.has(key) ? values.get(key) : fallback;
 
 export async function api(path, { method = 'GET', body, signal } = {}) {
@@ -43,62 +48,91 @@ export function hydratePublicProfile(data) {
 }
 
 export function setSnapshot(data, first = false) {
-  if (first) { resetCatalog(); cancelSeen(); }
+  if (first) { resetCatalog(); cancelSeen(); actions.clear(); accountRevision++; }
+  confirmed = data;
+  publishSnapshot(true);
+}
+
+function publishSnapshot(full = false) {
+  let data = confirmed;
+  for (const operation of actions.values()) data = withAction(data, operation, operation.post);
   snapshot = data;
-  values.set('ressoa.entries', data.entries.map(post => localPost(post, true)));
+  if (full) {
+    values.set('ressoa.entries', data.entries.map(post => localPost(post, true)));
+    values.set('ressoa.profile', { ...data.profile, favorites: data.profile.favorites.map(indexTrack), background: indexTrack(data.profile.background) });
+    values.set('ressoa.weekly', data.weekly ? { ...data.weekly, item: data.weekly.item ? localPost(data.weekly.item, true) : null } : null);
+    values.set('ressoa.draft', { ...data.draft, track: indexTrack(data.draft.track) });
+  }
   values.set('ressoa.public', data.publicPosts.map(post => localPost(post)));
-  values.set('ressoa.profile', { ...data.profile, favorites: data.profile.favorites.map(indexTrack), background: indexTrack(data.profile.background) });
-  values.set('ressoa.weekly', data.weekly ? { ...data.weekly, item: data.weekly.item ? localPost(data.weekly.item, true) : null } : null);
   values.set('ressoa.saved', data.saved);
   values.set('ressoa.social', data.social);
-  values.set('ressoa.draft', { ...data.draft, track: indexTrack(data.draft.track) });
   window.dispatchEvent(new Event('accountchange'));
 }
 
-function applyAction({ action, post }) {
-  const { kind, target, active } = action;
+function withAction(data, { kind, target, active, privateProfile }, post) {
   const membership = list => active ? [...new Set([...list, target])] : list.filter(id => id !== target);
-  const social = { ...snapshot.social };
+  const social = { ...data.social };
   if (kind === 'like') {
     social.likes = { ...social.likes };
     if (active) social.likes[target] = ['me'];
     else delete social.likes[target];
   }
   if (kind === 'repost') social.reposts = membership(social.reposts);
-  const saved = kind === 'saved' ? membership(snapshot.saved) : snapshot.saved;
-  let publicPosts = snapshot.publicPosts;
-  if (post.ownerId !== snapshot.user.id) {
+  if (kind === 'follow') {
+    // A pending follow never grants access to a private profile.
+    const following = active && (!privateProfile || social.following.includes(target));
+    social.following = following ? [...new Set([...social.following, target])] : social.following.filter(id => id !== target);
+    social.requested = active && !following ? [...new Set([...(social.requested || []), target])] : (social.requested || []).filter(id => id !== target);
+  }
+  const saved = kind === 'saved' ? membership(data.saved) : data.saved;
+  let publicPosts = data.publicPosts;
+  if (post && post.ownerId !== data.user.id) {
     publicPosts = publicPosts.some(item => item.id === target)
       ? publicPosts.map(item => item.id === target ? post : item) : [...publicPosts, post];
-    const local = localPost(post);
-    const current = values.get('ressoa.public');
-    values.set('ressoa.public', current.some(item => item.id === target)
-      ? current.map(item => item.id === target ? local : item) : [...current, local]);
   }
-  snapshot = { ...snapshot, social, saved, publicPosts };
-  values.set('ressoa.social', social);
-  values.set('ressoa.saved', saved);
-  window.dispatchEvent(new Event('accountchange'));
+  return { ...data, social, saved, publicPosts };
 }
 
-export function mutate(path, method, body) {
+function applyAction({ action, post }) {
+  confirmed = withAction(confirmed, action, post);
+  publishSnapshot();
+}
+
+export function mutate(path, method, body, concurrent = false) {
   if (path === '/api/logout') cancelSeen();
-  pending++;
-  const job = queue.then(async () => {
+  pending++; mutationRevision++;
+  const generation = accountRevision;
+  // Social actions can run together; full account writes wait for them before
+  // taking a snapshot, so an older response cannot erase a confirmed action.
+  const barrier = concurrent ? queue : Promise.all([queue, ...actionJobs]);
+  const job = barrier.then(async () => {
     try {
+      if (generation !== accountRevision) throw new Error('A conta mudou. Reabra a tela e tente novamente.');
       const payload = typeof body === 'function' ? body() : body;
       const result = await api(path, { method, body: payload });
-      if (result.user) setSnapshot(result);
-      else if (result.action && result.post) applyAction(result);
+      if (generation === accountRevision) {
+        if (result.action) applyAction(result);
+        else if (result.user && concurrent) {
+          const post = [...result.entries, ...result.publicPosts, ...(result.weekly?.item ? [result.weekly.item] : [])].find(post => post.id === payload.target);
+          applyAction({ action: payload, post });
+        } else if (result.user) setSnapshot(result);
+      }
       return result;
     } catch (error) {
-      if (error.status === 409) {
-        try { setSnapshot(await api('/api/bootstrap')); } catch {}
+      if (error.status === 409 && generation === accountRevision) {
+        try {
+          const data = await api('/api/bootstrap');
+          if (generation === accountRevision) setSnapshot(data);
+        } catch {}
       }
       throw error;
     } finally { pending--; }
   });
-  queue = job.catch(() => {});
+  const settled = job.catch(() => {});
+  if (concurrent) {
+    actionJobs.add(settled);
+    settled.then(() => actionJobs.delete(settled));
+  } else queue = settled;
   return job;
 }
 
@@ -115,14 +149,30 @@ export async function writeAccount(key, value, options={}) {
 }
 
 export async function refreshAccount() {
-  await queue;
+  await Promise.all([queue, ...actionJobs]);
   if (pending) return false;
+  const revision = mutationRevision, generation = accountRevision;
   const data = await api('/api/bootstrap');
-  if (!pending) { setSnapshot(data); return true; }
+  if (!pending && revision === mutationRevision && generation === accountRevision) { setSnapshot(data); return true; }
   return false;
 }
 
-export const socialAction = (kind, target, active) => mutate('/api/action', 'POST', { kind, target, active, compact: kind !== 'follow' });
+export function socialAction(kind, target, active, options = {}) {
+  const key = `${kind}:${target}`;
+  if (actions.has(key)) return actions.get(key).promise;
+  const generation = accountRevision;
+  const post = options.post ? { ...wirePost(options.post), ownerId: options.post.ownerId === 'me' ? snapshot.user.id : options.post.ownerId } : null;
+  const operation = { kind, target, active, post, privateProfile: options.privateProfile !== false };
+  actions.set(key, operation);
+  publishSnapshot();
+  const job = mutate('/api/action', 'POST', { kind, target, active, compact: kind !== 'follow' }, kind !== 'follow');
+  operation.promise = job.finally(() => {
+    if (generation === accountRevision && actions.get(key) === operation) {
+      actions.delete(key); publishSnapshot();
+    }
+  });
+  return operation.promise;
+}
 
 // Reading history never holds up an explicit action such as liking or posting.
 let seenTimer, seenPending = null, seenWriting = false;

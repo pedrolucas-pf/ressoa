@@ -11,7 +11,7 @@ import { albumArt, fitLyricArt } from './post-art.js';
 import { createLyricPicker } from './lyric-picker.js';
 import { ensureTrackDetails, durationLabel, trackSummary } from './track-context.js';
 import { createPeopleSearch, personHref } from './people-search.js';
-import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, hydratePublicProfile, hydratePost } from './session.js';
+import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, actionPending, hydratePublicProfile, hydratePost } from './session.js';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -134,7 +134,7 @@ function authorMarkup(post) {
 }
 function saveButton(post) {
   const isSaved = saved.includes(post.id);
-  return `<button class="icon-button save-button" data-save="${escape(post.id)}" aria-label="${isSaved ? 'Remover das' : 'Adicionar às'} guardadas: ${escape(tracks[post.track].title)}" aria-pressed="${isSaved}">${icons.bookmark}</button>`;
+  return `<button class="icon-button save-button" data-save="${escape(post.id)}" ${pendingAttributes('saved',post.id)} aria-label="${isSaved ? 'Remover das' : 'Adicionar às'} guardadas: ${escape(tracks[post.track].title)}" aria-pressed="${isSaved}">${icons.bookmark}</button>`;
 }
 
 function storyMarkup(post) {
@@ -250,10 +250,11 @@ document.addEventListener('click',async event=>{
   try{await toggleSave(id);}finally{savingPosts.delete(id);button.disabled=false;}
 });
 async function toggleSave(id) {
-  if (!allPosts().some(post => post.id === id)) return;
+  const post=allPosts().find(post => post.id === id);
+  if (!post || actionPending('saved',id)) return;
   const existed = saved.includes(id);
   let stored = false;
-  try { await socialAction('saved', id, !existed); stored = true; } catch(error) { toast(error.message); return; }
+  try { await socialAction('saved', id, !existed, {post}); stored = true; } catch(error) { toast(error.message); return; }
   document.querySelectorAll('[data-save]').forEach(button => {
     if (button.dataset.save !== id) return;
     const title = tracks[allPosts().find(post => post.id === id).track].title;
@@ -487,7 +488,8 @@ form.addEventListener('submit', async event => {
   const text = form.elements.reflection.value.trim();
   if (!composerPicker.requireSelection()) return;
   savingEntry=true;
-  $('#entry-form [type="submit"]').disabled=true;
+  const submit=$('#entry-form [type="submit"]'),submitLabel=submit.textContent;
+  submit.disabled=true;submit.textContent='Salvando…';
   $('#entry-form [type="submit"]').setAttribute('aria-busy','true');
   try {
   let entry;
@@ -512,7 +514,7 @@ form.addEventListener('submit', async event => {
   renderStories(); renderDiary(); renderProfile();
   if (wasEditing) openPost(entry.id);
   toast(wasEditing ? 'Alterações salvas.' : 'Ressoa salva.');
-  } finally { savingEntry=false; $('#entry-form [type="submit"]').disabled=false; $('#entry-form [type="submit"]').removeAttribute('aria-busy'); }
+  } finally { savingEntry=false;submit.disabled=false;submit.textContent=submitLabel;submit.removeAttribute('aria-busy'); }
 });
 
 
@@ -649,7 +651,7 @@ function renderProfile() {
  const repostIds=new Set(reposted.map(post=>post.id)),combined=[...new Map([...publicEntries,...reposted].map(post=>[post.id,post])).values()];
  const ordered=combined.sort((a,b)=>Number(info.pinned.includes(b.id))-Number(info.pinned.includes(a.id))||Date.parse(b.createdAt)-Date.parse(a.createdAt)||b.id.localeCompare(a.id));
  const more=(kind,next)=>!own&&next!==null?`<button class="button load-profile-posts" data-more-profile="${kind}" ${loadingMore?'disabled':''}>${loadingMore?'Carregando…':kind==='reposts'?'Carregar mais reposts':'Carregar mais'}</button>`:'';
- const identity=`<div class="profile-identity">${profileAvatar(info.photo,info.displayName)}<div><h1>${escape(info.displayName)}</h1><p class="profile-handle">@${escape(info.handle)}</p>${info.bio?`<p class="profile-bio">${escape(info.bio)}</p>`:''}${own?'':`<button class="button profile-follow" data-follow="${escape(visitedId)}" aria-pressed="${hasFollow(visitedId)}">${followLabel(visitedId,info.isPrivate)}</button>`}</div></div>`;
+ const identity=`<div class="profile-identity">${profileAvatar(info.photo,info.displayName)}<div><h1>${escape(info.displayName)}</h1><p class="profile-handle">@${escape(info.handle)}</p>${info.bio?`<p class="profile-bio">${escape(info.bio)}</p>`:''}${own?'':`<button class="button profile-follow" data-follow="${escape(visitedId)}" data-private="${Boolean(info.isPrivate)}" ${pendingAttributes('follow',visitedId)} aria-pressed="${hasFollow(visitedId)}">${followLabel(visitedId,info.isPrivate)}</button>`}</div></div>`;
  if(!own&&visitedProfile.canView===false){$('#profile-content').innerHTML=identity+'<section class="locked-profile"><h2>Perfil privado</h2><p>Somente seguidores aprovados.</p></section>';applyProfileBackground();return;}
  $('#profile-content').innerHTML=`${identity}
  ${featured?weeklyFeatureMarkup(featured):''}
@@ -769,10 +771,10 @@ profileForm.addEventListener('submit', async event => {
   if(new Set(values).size!==values.length){$('#favorite-error').textContent='Escolha músicas diferentes para suas favoritas.';favoritePickers[0].input.focus();return;}
   const updated = cleanProfile({ ...profileInfo, displayName: name, handle: profileForm.elements.handle.value.trim(), bio: profileForm.elements.bio.value.trim(), favorites: values.map(Number), photo: pendingPhoto, background: pendingBackground,isPrivate:profileForm.elements.isPrivate.checked });
   savingProfile=true;
-  const submit=profileForm.querySelector('[type="submit"]');submit.disabled=true;submit.setAttribute('aria-busy','true');
+  const submit=profileForm.querySelector('[type="submit"]'),submitLabel=submit.textContent;submit.disabled=true;submit.textContent='Salvando…';submit.setAttribute('aria-busy','true');
   let stored;
   try { stored=await write('ressoa.profile',updated); }
-  finally { savingProfile=false;submit.disabled=false;submit.removeAttribute('aria-busy'); }
+  finally { savingProfile=false;submit.disabled=false;submit.textContent=submitLabel;submit.removeAttribute('aria-busy'); }
   if(!stored)return;
   $('#profile-editor').close();
   renderProfile(); renderDiary(); renderStories(); toast('Perfil salvo.');
@@ -782,7 +784,7 @@ profileForm.elements.displayName.addEventListener('input', event => event.target
 
 function followButton(post) {
  const owner=isMine(post)?'me':authorKey(post);if(owner==='me')return '';
- return `<button class="follow-button" data-follow="${escape(owner)}" aria-pressed="${hasFollow(owner)}">${followLabel(owner,post.authorPrivate)}</button>`;
+ return `<button class="follow-button" data-follow="${escape(owner)}" data-private="${Boolean(post.authorPrivate)}" ${pendingAttributes('follow',owner)} aria-pressed="${hasFollow(owner)}">${followLabel(owner,post.authorPrivate)}</button>`;
 }
 const hasFollow=id=>social.following.includes(id)||(social.requested||[]).includes(id);
 const followLabel=(id,privateProfile)=>social.following.includes(id)?'Seguindo':(social.requested||[]).includes(id)?'Solicitado':privateProfile?'Solicitar seguir':'Seguir';
@@ -802,12 +804,16 @@ setInterval(pollFollowRequests,30000);
 function socialButtons(post) {
  if(post.visibility==='private')return '';
  const liked=(social.likes[post.id]||[]).includes('me'),reposted=social.reposts.includes(post.id);
- return `<button class="icon-button social-action like-action" data-like="${escape(post.id)}" aria-label="${liked?'Descurtir':'Curtir'} ressoa" aria-pressed="${liked}">${svg('<path d="M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z"/>')}</button>${!isMine(post)?`<button class="icon-button social-action" data-repost="${escape(post.id)}" aria-label="${reposted?'Remover repost':'Repostar ressoa'}" aria-pressed="${reposted}">${svg('<path d="m16 3 4 4-4 4M4 11V7h16M8 21l-4-4 4-4m12 0v4H4"/>')}</button>`:''}<button class="icon-button social-action" data-share="${escape(post.id)}" aria-label="Compartilhar ressoa">${svg('<path d="M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7"/>')}</button>`;
+ return `<button class="icon-button social-action like-action" data-like="${escape(post.id)}" ${pendingAttributes('like',post.id)} aria-label="${liked?'Descurtir':'Curtir'} ressoa" aria-pressed="${liked}">${svg('<path d="M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z"/>')}</button>${!isMine(post)?`<button class="icon-button social-action" data-repost="${escape(post.id)}" ${pendingAttributes('repost',post.id)} aria-label="${reposted?'Remover repost':'Repostar ressoa'}" aria-pressed="${reposted}">${svg('<path d="m16 3 4 4-4 4M4 11V7h16M8 21l-4-4 4-4m12 0v4H4"/>')}</button>`:''}<button class="icon-button social-action" data-share="${escape(post.id)}" aria-label="Compartilhar ressoa">${svg('<path d="M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7"/>')}</button>`;
 }
 function syncSocialButtons() {
- document.querySelectorAll('[data-like]').forEach(button=>{const on=(social.likes[button.dataset.like]||[]).includes('me');button.setAttribute('aria-pressed',String(on));button.setAttribute('aria-label',on?'Descurtir ressoa':'Curtir ressoa');});
- document.querySelectorAll('[data-repost]').forEach(button=>{const on=social.reposts.includes(button.dataset.repost);button.setAttribute('aria-pressed',String(on));button.setAttribute('aria-label',on?'Remover repost':'Repostar ressoa');});
+ const markPending=(button,kind,target)=>{const waiting=actionPending(kind,target);button.disabled=waiting;if(waiting)button.setAttribute('aria-busy','true');else button.removeAttribute('aria-busy');};
+ document.querySelectorAll('[data-like]').forEach(button=>{const on=(social.likes[button.dataset.like]||[]).includes('me');button.setAttribute('aria-pressed',String(on));button.setAttribute('aria-label',on?'Descurtir ressoa':'Curtir ressoa');markPending(button,'like',button.dataset.like);});
+ document.querySelectorAll('[data-repost]').forEach(button=>{const on=social.reposts.includes(button.dataset.repost);button.setAttribute('aria-pressed',String(on));button.setAttribute('aria-label',on?'Remover repost':'Repostar ressoa');markPending(button,'repost',button.dataset.repost);});
+ document.querySelectorAll('[data-save]').forEach(button=>{const on=saved.includes(button.dataset.save),post=allPosts().find(post=>post.id===button.dataset.save);button.setAttribute('aria-pressed',String(on));if(post)button.setAttribute('aria-label',`${on?'Remover das':'Adicionar às'} guardadas: ${tracks[post.track].title}`);markPending(button,'saved',button.dataset.save);});
+ document.querySelectorAll('[data-follow]').forEach(button=>{const id=button.dataset.follow;button.setAttribute('aria-pressed',String(hasFollow(id)));button.textContent=button.closest('#people-dialog')&&peopleMode==='following'&&social.following.includes(id)?'Deixar de seguir':followLabel(id,button.dataset.private!=='false');markPending(button,'follow',id);});
 }
+function pendingAttributes(kind,target){return actionPending(kind,target)?'disabled aria-busy="true"':'';}
 let peopleRequest=null,peopleGeneration=0,peopleMode=null;
 function cancelPeopleRequest() {peopleRequest?.abort();peopleRequest=null;peopleGeneration++;}
 $('#people-dialog').addEventListener('close',()=>{cancelPeopleRequest();peopleMode=null;});
@@ -903,10 +909,10 @@ document.addEventListener('click',async event=>{
  if(like||follow||repost){
   const button=like||follow||repost;if(button.disabled)return;button.disabled=true;button.setAttribute('aria-busy','true');
   try{
-   if(like){const post=allPosts().find(item=>item.id===like.dataset.like);if(!post||post.visibility==='private')return;await socialAction('like',post.id,!(social.likes[post.id]||[]).includes('me'));syncSocialButtons();}
-   if(follow){const id=follow.dataset.follow;if(id==='me')return;await socialAction('follow',id,!hasFollow(id));renderStories();if(page==='perfil'){if(visitedId)await loadVisitedProfile();else renderProfile();}if($('#people-dialog').open&&peopleMode==='following')showFollowing();}
-   if(repost){const post=allPosts().find(item=>item.id===repost.dataset.repost);if(!post||isMine(post)||post.visibility==='private')return;await socialAction('repost',post.id,!social.reposts.includes(post.id));syncSocialButtons();if(page==='perfil')renderProfile();toast(social.reposts.includes(post.id)?'Repostado no seu perfil.':'Repost removido.');}
-  }catch(error){toast(error.message);}finally{button.disabled=false;button.removeAttribute('aria-busy');}
+   if(like){const post=allPosts().find(item=>item.id===like.dataset.like);if(!post||post.visibility==='private'||actionPending('like',post.id))return;await socialAction('like',post.id,!(social.likes[post.id]||[]).includes('me'),{post});}
+   if(follow){const id=follow.dataset.follow;if(id==='me'||actionPending('follow',id))return;await socialAction('follow',id,!hasFollow(id),{privateProfile:follow.dataset.private!=='false'});renderStories();if(page==='perfil'){if(visitedId)await loadVisitedProfile();else renderProfile();}if($('#people-dialog').open&&peopleMode==='following')showFollowing();}
+   if(repost){const post=allPosts().find(item=>item.id===repost.dataset.repost);if(!post||isMine(post)||post.visibility==='private'||actionPending('repost',post.id))return;await socialAction('repost',post.id,!social.reposts.includes(post.id),{post});if(page==='perfil')renderProfile();toast(social.reposts.includes(post.id)?'Repostado no seu perfil.':'Repost removido.');}
+  }catch(error){toast(error.message);}finally{button.disabled=false;button.removeAttribute('aria-busy');syncSocialButtons();}
  }
  if(share)openShare(share.dataset.share);
  if(edit){$('#reader').close();openComposer(edit.dataset.edit);}
@@ -937,10 +943,14 @@ async function refreshWeek() {
 setInterval(() => {refreshWeek();if(stories.some(post=>!isInFeed(post))&&!document.querySelector('dialog[open]'))renderStories(false,true);},60000);
 document.addEventListener('visibilitychange', refreshWeek);
 window.addEventListener('accountchange', () => {
+ const oldReposts=social.reposts,oldSaved=saved;
  entries = validEntries(read('ressoa.entries', [])); saved=read('ressoa.saved',[]);
  profileInfo=cleanProfile(read('ressoa.profile',defaultProfile));social=read('ressoa.social',{});
  weekly=read('ressoa.weekly',null);publicPosts=read('ressoa.public',[]);
  incomingRequests=getAccount().followRequests||[];requestPollGeneration++;updatePrivacyUI();updateProfileShortcut();
+ if(page==='perfil'&&!visitedId&&JSON.stringify(oldReposts)!==JSON.stringify(social.reposts))renderProfile();
+ if(page==='diario'&&collection==='saved'&&JSON.stringify(oldSaved)!==JSON.stringify(saved))renderDiary();
+ syncSocialButtons();
  $('#account-status').textContent=`@${getAccount().user.username}`;
 });
 

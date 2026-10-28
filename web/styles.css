@@ -386,6 +386,7 @@ form .picker-search input.catalog-query { min-width: 0; margin: 0; padding: 12px
 .story-actions>.save-button {margin-left:auto}
 .social-action {color:var(--muted)}
 .social-action[aria-pressed="true"] {color:var(--text)}
+.social-action[aria-busy="true"], .save-button[aria-busy="true"], .follow-button[aria-busy="true"], .profile-follow[aria-busy="true"] {opacity:.85;cursor:progress}
 .like-action[aria-pressed="true"] svg {fill:currentColor}
 .reader-social {display:flex;gap:15px;align-items:center;margin:25px 0}
 .reader-social>.save-button {margin-left:auto;}
