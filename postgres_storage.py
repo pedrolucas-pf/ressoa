@@ -40,22 +40,38 @@ def parameters_sql(statement):
     return ''.join(result)
 
 
+def connection_info(dsn):
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    options = conninfo_to_dict(dsn)
+    if options.get('host', '') not in ('localhost', '127.0.0.1', '::1'):
+        if options.get('sslmode') not in ('require', 'verify-ca', 'verify-full'):
+            options['sslmode'] = 'require'
+    options.setdefault('connect_timeout', '15')
+    return make_conninfo(**options)
+
+
+def create_pool(dsn):
+    import atexit
+    from psycopg_pool import ConnectionPool
+    pool = ConnectionPool(connection_info(dsn), name='ressoa', min_size=0, max_size=8,
+        max_idle=60, max_lifetime=600, timeout=15, num_workers=2, open=True,
+        kwargs=dict(autocommit=True, row_factory=row_factory, prepare_threshold=None),
+        check=ConnectionPool.check_connection)
+    atexit.register(pool.close)
+    return pool
+
+
 class PostgresConnection:
-    def __init__(self, dsn):
+    def __init__(self, dsn, pool=None):
         try:
             import psycopg
-            from psycopg.conninfo import conninfo_to_dict,make_conninfo
         except ImportError:
             raise RuntimeError('Instale requirements.txt para conectar ao PostgreSQL.') from None
         self._driver=psycopg
+        self._pool=pool
+        self._released=False
         try:
-            options=conninfo_to_dict(dsn)
-            host=options.get('host','')
-            if host not in ('localhost','127.0.0.1','::1'):
-                if options.get('sslmode') not in ('require','verify-ca','verify-full'):
-                    options['sslmode']='require'
-            options.setdefault('connect_timeout','15')
-            self._connection=psycopg.connect(make_conninfo(**options),autocommit=True,row_factory=row_factory,prepare_threshold=None)
+            self._connection=pool.getconn() if pool is not None else psycopg.connect(connection_info(dsn),autocommit=True,row_factory=row_factory,prepare_threshold=None)
         except Exception:
             raise RuntimeError('Não foi possível conectar ao PostgreSQL. Confira DATABASE_URL e o acesso ao banco.') from None
         self._track_cache={};self._person_cache={}
@@ -73,11 +89,25 @@ class PostgresConnection:
     def commit(self):
         self._connection.commit()
 
+    def fetch_many(self, queries):
+        try:
+            with self._connection.pipeline():
+                cursors = [self.execute(statement, parameters) for statement, parameters in queries]
+            return [cursor.fetchall() for cursor in cursors]
+        except self._driver.Error as error:
+            raise RuntimeError(f'Falha de consulta PostgreSQL (SQLSTATE {error.sqlstate or "unknown"}).') from None
+
     def rollback(self):
         self._connection.rollback()
 
     def close(self):
-        self._connection.close()
+        if self._released:
+            return
+        self._released=True
+        if self._pool is None:
+            self._connection.close()
+        else:
+            self._pool.putconn(self._connection)
 
     def __enter__(self):
         return self
@@ -98,6 +128,9 @@ class ConnectionLease:
 
     def execute(self, statement, parameters=None):
         return self._connection.execute(statement, parameters)
+
+    def fetch_many(self, queries):
+        return self._connection.fetch_many(queries)
 
     def commit(self):
         self._connection.commit()

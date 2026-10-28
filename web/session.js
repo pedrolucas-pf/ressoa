@@ -43,7 +43,7 @@ export function hydratePublicProfile(data) {
 }
 
 export function setSnapshot(data, first = false) {
-  if (first) resetCatalog();
+  if (first) { resetCatalog(); cancelSeen(); }
   snapshot = data;
   values.set('ressoa.entries', data.entries.map(post => localPost(post, true)));
   values.set('ressoa.public', data.publicPosts.map(post => localPost(post)));
@@ -55,13 +55,41 @@ export function setSnapshot(data, first = false) {
   window.dispatchEvent(new Event('accountchange'));
 }
 
+function applyAction({ action, post }) {
+  const { kind, target, active } = action;
+  const membership = list => active ? [...new Set([...list, target])] : list.filter(id => id !== target);
+  const social = { ...snapshot.social };
+  if (kind === 'like') {
+    social.likes = { ...social.likes };
+    if (active) social.likes[target] = ['me'];
+    else delete social.likes[target];
+  }
+  if (kind === 'repost') social.reposts = membership(social.reposts);
+  const saved = kind === 'saved' ? membership(snapshot.saved) : snapshot.saved;
+  let publicPosts = snapshot.publicPosts;
+  if (post.ownerId !== snapshot.user.id) {
+    publicPosts = publicPosts.some(item => item.id === target)
+      ? publicPosts.map(item => item.id === target ? post : item) : [...publicPosts, post];
+    const local = localPost(post);
+    const current = values.get('ressoa.public');
+    values.set('ressoa.public', current.some(item => item.id === target)
+      ? current.map(item => item.id === target ? local : item) : [...current, local]);
+  }
+  snapshot = { ...snapshot, social, saved, publicPosts };
+  values.set('ressoa.social', social);
+  values.set('ressoa.saved', saved);
+  window.dispatchEvent(new Event('accountchange'));
+}
+
 export function mutate(path, method, body) {
+  if (path === '/api/logout') cancelSeen();
   pending++;
   const job = queue.then(async () => {
     try {
       const payload = typeof body === 'function' ? body() : body;
       const result = await api(path, { method, body: payload });
       if (result.user) setSnapshot(result);
+      else if (result.action && result.post) applyAction(result);
       return result;
     } catch (error) {
       if (error.status === 409) {
@@ -94,5 +122,24 @@ export async function refreshAccount() {
   return false;
 }
 
-export const socialAction = (kind, target, active) => mutate('/api/action', 'POST', { kind, target, active });
-export const saveSeen = value => mutate('/api/preference', 'PUT', { key: 'seen', value });
+export const socialAction = (kind, target, active) => mutate('/api/action', 'POST', { kind, target, active, compact: kind !== 'follow' });
+
+// Reading history never holds up an explicit action such as liking or posting.
+let seenTimer, seenPending = null, seenWriting = false;
+function cancelSeen() { clearTimeout(seenTimer); seenPending = null; }
+export function saveSeen(value) {
+  seenPending = { ...value };
+  clearTimeout(seenTimer);
+  seenTimer = setTimeout(flushSeen, 1000);
+  return Promise.resolve();
+}
+async function flushSeen() {
+  if (seenWriting || !seenPending) return;
+  const value = seenPending; seenPending = null; seenWriting = true;
+  try { await api('/api/preference', { method: 'PUT', body: { key: 'seen', value } }); }
+  catch { /* The next reading-history update can retry without blocking the feed. */ }
+  finally {
+    seenWriting = false;
+    if (seenPending) seenTimer = setTimeout(flushSeen, 1000);
+  }
+}

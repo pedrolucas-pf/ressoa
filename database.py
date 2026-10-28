@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS actions (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
  kind TEXT NOT NULL CHECK(kind IN ('like','repost','saved')), PRIMARY KEY(user_id, post_id, kind)
 );
+CREATE INDEX IF NOT EXISTS actions_post ON actions(post_id,kind,user_id);
+CREATE INDEX IF NOT EXISTS follows_target ON follows(target_id,user_id);
 CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS shares (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
@@ -130,6 +132,9 @@ PRAGMA user_version = 4;
 
 
 class Connection(sqlite3.Connection):
+    def fetch_many(self, queries):
+        return [self.execute(statement, parameters).fetchall() for statement, parameters in queries]
+
     def __exit__(self, *args):
         try:
             return super().__exit__(*args)
@@ -143,9 +148,10 @@ class Database:
         self._request_state = ContextVar('ressoa_database_request', default=None)
         self.is_postgres=str(path).startswith(('postgres://','postgresql://'))
         if self.is_postgres:
-            from postgres_storage import initialize
+            from postgres_storage import initialize, create_pool
             self.path=None;self._dsn=str(path)
             initialize(self._dsn,SCHEMA)
+            self._pool=create_pool(self._dsn)
             return
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,9 +198,9 @@ class Database:
             from postgres_storage import PostgresConnection, ConnectionLease
             state = self._request_state.get()
             if state is None:
-                return PostgresConnection(self._dsn)
+                return PostgresConnection(self._dsn, self._pool)
             if 'connection' not in state:
-                state['connection'] = PostgresConnection(self._dsn)
+                state['connection'] = PostgresConnection(self._dsn, self._pool)
             return ConnectionLease(state['connection'])
         db = sqlite3.connect(self.path, timeout=15, factory=Connection)
         db.row_factory = sqlite3.Row
@@ -224,10 +230,12 @@ class Database:
 
     def limit(self, key, maximum=15, seconds=900):
         key, now = hashlib.sha256(key.encode()).hexdigest(), time.time()
-        with self.transaction() as db:
-            db.execute('DELETE FROM rate_limits WHERE key=? AND reset_at < ?', (key,now))
-            db.execute('INSERT INTO rate_limits VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=rate_limits.count+1', (key, now + seconds))
-            count = db.execute('SELECT count FROM rate_limits WHERE key=?', (key,)).fetchone()[0]
+        # One atomic statement locks only this counter, without the application write lock.
+        with self.connect() as db:
+            count = db.execute('''INSERT INTO rate_limits VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET
+                count=CASE WHEN rate_limits.reset_at < ? THEN 1 ELSE rate_limits.count+1 END,
+                reset_at=CASE WHEN rate_limits.reset_at < ? THEN ? ELSE rate_limits.reset_at END
+                RETURNING count''', (key,now+seconds,now,now,now+seconds)).fetchone()[0]
         if count > maximum:
             raise APIError(429, 'Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.')
 
@@ -387,11 +395,20 @@ class Database:
                     kind=row['kind'], createdAt=row['created_at'], updatedAt=row['updated_at'],publishedAt=published,feedExpiresAt=week_end,lyricExcerpt=row['lyric_excerpt'],authorPrivate=bool(owner['is_private']))
 
     def accessible(self, db, user_id, post_id, public=False):
-        row = db.execute('SELECT * FROM posts WHERE id=?', (post_id,)).fetchone()
-        if not row or (row['owner_id'] != user_id and row['visibility'] != 'public') or (public and row['visibility'] != 'public') or not self.can_view_profile(db,user_id,row['owner_id']):
+        visibility = " AND p.visibility='public'" if public else ''
+        row = db.execute(f'''SELECT p.*,t.data AS track_data,u.display_name AS owner_name,
+            u.username AS owner_handle,u.photo AS owner_photo,u.is_private AS owner_private,
+            EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL) AS active_week
+            FROM posts p JOIN users u ON u.id=p.owner_id JOIN tracks t ON t.id=p.track_id
+            WHERE p.id=? AND (p.owner_id=? OR p.visibility='public') AND
+                (u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id)){visibility}''',
+            (current_week(),post_id,user_id,user_id,user_id)).fetchone()
+        if not row:
             raise APIError(404, 'Ressoa não encontrada.')
-        if row['kind'] == 'weekly' and not db.execute('SELECT 1 FROM weekly WHERE post_id=? AND week_key=? AND deleted_at IS NULL', (post_id, current_week())).fetchone():
+        if row['kind'] == 'weekly' and not row['active_week']:
             raise APIError(404, 'Este destaque já terminou.')
+        db._track_cache[row['track_id']]=json.loads(row['track_data'])
+        db._person_cache[row['owner_id']]=dict(display_name=row['owner_name'],username=row['owner_handle'],photo=row['owner_photo'],is_private=row['owner_private'])
         return row
 
     def shared_post(self, user_id, post_id):
@@ -402,32 +419,39 @@ class Database:
     def bootstrap(self, user_id):
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
-            user = db.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
-            own = db.execute("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)).fetchall()
             access,access_params=self.visible_author_sql(user_id)
             published="COALESCE(NULLIF(p.feed_published_at,''),p.created_at)"
             published_time=f"CAST({published} AS timestamptz)" if self.is_postgres else f"julianday({published})"
             recent=f"{published_time}>CAST(? AS timestamptz)" if self.is_postgres else f"{published_time}>julianday(?)"
             cutoff=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()
-            public = db.execute(f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
+            queries = [
+                ('SELECT * FROM users WHERE id=?', (user_id,)),
+                ("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)),
+                (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
                 AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL))
-                ORDER BY EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id) DESC,{published_time} DESC LIMIT 120""", (user_id,*access_params,cutoff,current_week(), user_id)).fetchall()
-            extra = db.execute(f"""SELECT DISTINCT p.* FROM posts p JOIN actions a ON p.id=a.post_id JOIN users u ON u.id=p.owner_id WHERE a.user_id=? AND (p.visibility='public' OR p.owner_id=?) AND {access}
-                AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL)) LIMIT 500""", (user_id,user_id,*access_params,current_week())).fetchall()
+                ORDER BY EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id) DESC,{published_time} DESC LIMIT 120""", (user_id,*access_params,cutoff,current_week(), user_id)),
+                (f"""SELECT DISTINCT p.* FROM posts p JOIN actions a ON p.id=a.post_id JOIN users u ON u.id=p.owner_id WHERE a.user_id=? AND (p.visibility='public' OR p.owner_id=?) AND {access}
+                AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL)) LIMIT 500""", (user_id,user_id,*access_params,current_week())),
+                ('SELECT * FROM weekly WHERE user_id=? AND week_key=?', (user_id,current_week())),
+                (f"""SELECT a.* FROM actions a JOIN posts p ON p.id=a.post_id JOIN users u ON u.id=p.owner_id
+                WHERE a.user_id=? AND (p.visibility='public' OR p.owner_id=?) AND {access}
+                AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL))""", (user_id,user_id,*access_params,current_week())),
+                ('SELECT u.id,u.display_name,u.username,u.photo FROM users u JOIN follows f ON f.target_id=u.id WHERE f.user_id=?', (user_id,)),
+                ('SELECT u.id,u.display_name,u.username,u.photo FROM users u JOIN follows f ON f.user_id=u.id WHERE f.target_id=? ORDER BY u.display_name,u.id', (user_id,)),
+                ('SELECT u.id,u.display_name,u.username,u.photo,r.created_at FROM follow_requests r JOIN users u ON u.id=r.user_id WHERE r.target_id=? ORDER BY r.created_at,u.id', (user_id,)),
+                ('SELECT target_id FROM follow_requests WHERE user_id=?', (user_id,)),
+            ]
+            users,own,public,extra,selections,actions,following,followers,request_rows,requested_rows = db.fetch_many(queries)
+            user = users[0]
             shared = {row['id']: row for row in [*public, *extra] if row['owner_id'] != user_id}
-            selection = db.execute('SELECT * FROM weekly WHERE user_id=? AND week_key=?', (user_id, current_week())).fetchone()
+            selection = selections[0] if selections else None
             weekly = None
             if selection:
                 item = db.execute('SELECT * FROM posts WHERE id=?', (selection['post_id'],)).fetchone()
                 weekly = dict(postId=selection['post_id'] or 'deleted', item=self.post(db, item), weekKey=selection['week_key'], selectedAt=selection['selected_at'], deletedAt=selection['deleted_at'])
-            actions = db.execute(f"""SELECT a.* FROM actions a JOIN posts p ON p.id=a.post_id JOIN users u ON u.id=p.owner_id
-                WHERE a.user_id=? AND (p.visibility='public' OR p.owner_id=?) AND {access}
-                AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL))""", (user_id,user_id,*access_params,current_week())).fetchall()
-            following = db.execute('SELECT u.id,u.display_name,u.username,u.photo FROM users u JOIN follows f ON f.target_id=u.id WHERE f.user_id=?', (user_id,)).fetchall()
-            followers=db.execute('SELECT u.id,u.display_name,u.username,u.photo FROM users u JOIN follows f ON f.user_id=u.id WHERE f.target_id=? ORDER BY u.display_name,u.id',(user_id,)).fetchall()
-            requests=self.follow_requests(db,user_id)
-            requested=[row['target_id'] for row in db.execute('SELECT target_id FROM follow_requests WHERE user_id=?',(user_id,)).fetchall()]
+            requests=[dict(self.person(row),requestedAt=row['created_at']) for row in request_rows]
+            requested=[row['target_id'] for row in requested_rows]
             self.prime_posts(db,[*own,*public,*extra,*([item] if selection and item else [])],[*json.loads(user['favorites']),user['background']])
             return dict(user=dict(id=user_id, email=user['email'], username=user['username']),
                         profile=dict(displayName=user['display_name'], handle=user['username'], bio=user['bio'], photo=user['photo'],isPrivate=bool(user['is_private']), favorites=[self.track(db, key) for key in json.loads(user['favorites'])], pinned=json.loads(user['pinned']), background=self.track(db, user['background'])),
@@ -587,6 +611,7 @@ class Database:
                 db.execute('INSERT INTO actions VALUES (?,?,?) ON CONFLICT DO NOTHING', (user_id, target, kind))
             else:
                 db.execute('DELETE FROM actions WHERE user_id=? AND post_id=? AND kind=?', (user_id, target, kind))
+            return dict(action=dict(kind=kind,target=target,active=active),post=self.post(db,post))
 
     def follow_requests(self, db, user_id):
         rows=db.execute('SELECT u.id,u.display_name,u.username,u.photo,r.created_at FROM follow_requests r JOIN users u ON u.id=r.user_id WHERE r.target_id=? ORDER BY r.created_at,u.id',(user_id,)).fetchall()

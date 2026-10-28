@@ -488,6 +488,7 @@ form.addEventListener('submit', async event => {
   if (!composerPicker.requireSelection()) return;
   savingEntry=true;
   $('#entry-form [type="submit"]').disabled=true;
+  $('#entry-form [type="submit"]').setAttribute('aria-busy','true');
   try {
   let entry;
   if (editingId) {
@@ -511,7 +512,7 @@ form.addEventListener('submit', async event => {
   renderStories(); renderDiary(); renderProfile();
   if (wasEditing) openPost(entry.id);
   toast(wasEditing ? 'Alterações salvas.' : 'Ressoa salva.');
-  } finally { savingEntry=false; $('#entry-form [type="submit"]').disabled=false; }
+  } finally { savingEntry=false; $('#entry-form [type="submit"]').disabled=false; $('#entry-form [type="submit"]').removeAttribute('aria-busy'); }
 });
 
 
@@ -768,7 +769,10 @@ profileForm.addEventListener('submit', async event => {
   if(new Set(values).size!==values.length){$('#favorite-error').textContent='Escolha músicas diferentes para suas favoritas.';favoritePickers[0].input.focus();return;}
   const updated = cleanProfile({ ...profileInfo, displayName: name, handle: profileForm.elements.handle.value.trim(), bio: profileForm.elements.bio.value.trim(), favorites: values.map(Number), photo: pendingPhoto, background: pendingBackground,isPrivate:profileForm.elements.isPrivate.checked });
   savingProfile=true;
-  const stored=await write('ressoa.profile',updated);savingProfile=false;
+  const submit=profileForm.querySelector('[type="submit"]');submit.disabled=true;submit.setAttribute('aria-busy','true');
+  let stored;
+  try { stored=await write('ressoa.profile',updated); }
+  finally { savingProfile=false;submit.disabled=false;submit.removeAttribute('aria-busy'); }
   if(!stored)return;
   $('#profile-editor').close();
   renderProfile(); renderDiary(); renderStories(); toast('Perfil salvo.');
@@ -897,12 +901,12 @@ document.addEventListener('click',async event=>{
  const like=event.target.closest('[data-like]'),follow=event.target.closest('[data-follow]'),repost=event.target.closest('[data-repost]'),share=event.target.closest('[data-share]');
  const edit=event.target.closest('[data-edit]'),del=event.target.closest('[data-delete]'),feature=event.target.closest('[data-feature]'),pin=event.target.closest('[data-reader-pin]'),interactionList=event.target.closest('[data-interactions]');
  if(like||follow||repost){
-  const button=like||follow||repost;if(button.disabled)return;button.disabled=true;
+  const button=like||follow||repost;if(button.disabled)return;button.disabled=true;button.setAttribute('aria-busy','true');
   try{
    if(like){const post=allPosts().find(item=>item.id===like.dataset.like);if(!post||post.visibility==='private')return;await socialAction('like',post.id,!(social.likes[post.id]||[]).includes('me'));syncSocialButtons();}
    if(follow){const id=follow.dataset.follow;if(id==='me')return;await socialAction('follow',id,!hasFollow(id));renderStories();if(page==='perfil'){if(visitedId)await loadVisitedProfile();else renderProfile();}if($('#people-dialog').open&&peopleMode==='following')showFollowing();}
    if(repost){const post=allPosts().find(item=>item.id===repost.dataset.repost);if(!post||isMine(post)||post.visibility==='private')return;await socialAction('repost',post.id,!social.reposts.includes(post.id));syncSocialButtons();if(page==='perfil')renderProfile();toast(social.reposts.includes(post.id)?'Repostado no seu perfil.':'Repost removido.');}
-  }catch(error){toast(error.message);}finally{button.disabled=false;}
+  }catch(error){toast(error.message);}finally{button.disabled=false;button.removeAttribute('aria-busy');}
  }
  if(share)openShare(share.dataset.share);
  if(edit){$('#reader').close();openComposer(edit.dataset.edit);}

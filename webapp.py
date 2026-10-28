@@ -181,7 +181,9 @@ class Application:
             elif path == '/api/weekly' and method == 'DELETE':
                 self.db.delete_weekly(user_id)
             elif path == '/api/action' and method == 'POST':
-                self.db.action(user_id, data.get('kind'), data.get('target'), data.get('active'))
+                result = self.db.action(user_id, data.get('kind'), data.get('target'), data.get('active'))
+                if data.get('compact') is True and result is not None:
+                    return 200, result, []
             elif path == '/api/follow-request' and method == 'POST':
                 self.db.respond_follow(user_id,data)
             elif path == '/api/follower' and method == 'DELETE':
