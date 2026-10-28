@@ -1,0 +1,14 @@
+# Initial preview: Render Free + external Neon PostgreSQL. No local disk required.
+services:
+  - type: web
+    name: ressoa
+    runtime: docker
+    plan: free
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: RESSOA_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false

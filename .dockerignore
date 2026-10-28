@@ -1,0 +1,11 @@
+# Production build context: application source only.
+**
+!Dockerfile
+!requirements.txt
+!database.py
+!postgres_storage.py
+!webapp.py
+!services.py
+!gunicorn.conf.py
+!web/
+!web/**

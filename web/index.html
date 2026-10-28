@@ -1,0 +1,173 @@
+﻿<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101010">
+  <meta name="description" content="Ressoa — o que a música te faz sentir">
+  <title>Ressoa — o que a música te faz sentir</title>
+  <link rel="icon" href="assets/symbol.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="auth.js"></script>
+</head>
+<body class="auth-open">
+  <section id="auth-screen" class="auth-screen" aria-label="Entrar no Ressoa">
+    <div id="auth-covers" class="auth-covers" aria-hidden="true"></div>
+    <div class="auth-shade"></div>
+    <header class="auth-header"><div class="identity"><a class="brand" href="/" aria-label="Ressoa, início">ress<span class="brand-disc"><span class="sr-only">o</span></span>a</a><span class="slogan">o que a música te faz sentir</span></div></header>
+    <div class="auth-layout">
+      <div class="auth-intro"><h1>Escreva o que pensa, sente, o que quiser.</h1></div>
+      <div class="auth-panel">
+        <div class="auth-tabs" aria-label="Acessar conta"><button type="button" data-auth-mode="login" aria-pressed="true">Entrar</button><button type="button" data-auth-mode="register" aria-pressed="false">Criar conta</button></div>
+        <p id="auth-loading" role="status" class="form-note">Conectando…</p><button id="auth-retry" class="text-button" hidden>Tentar novamente</button>
+        <form id="auth-form" hidden>
+          <fieldset id="signup-fields" hidden disabled>
+            <label>Seu nome<input name="displayName" autocomplete="name" required minlength="2" maxlength="50" placeholder="Como podemos chamar você?"></label>
+            <label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254" placeholder="voce@email.com"></label>
+            <label>Nome de usuário<input name="username" autocomplete="username" required pattern="[a-z0-9._]{3,24}" minlength="3" maxlength="24" autocapitalize="none" spellcheck="false" placeholder="seu.usuario" title="3 a 24 letras minúsculas, números, ponto ou sublinhado."></label>
+          </fieldset>
+          <fieldset id="login-fields"><label>E-mail ou usuário<input name="identifier" autocomplete="username" required maxlength="254" autocapitalize="none" spellcheck="false" placeholder="Seu e-mail ou @usuário"></label></fieldset>
+          <label>Senha<span class="password-field"><input name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Sua senha"><button id="toggle-password" type="button" aria-pressed="false">Mostrar</button></span></label>
+          <p id="password-note" class="form-note" hidden>Use pelo menos 10 caracteres.</p>
+          <label class="remember-field"><input type="checkbox" name="remember">Manter conectado neste dispositivo</label>
+          <p id="auth-error" class="auth-error" role="alert"></p>
+          <button id="auth-submit" class="button primary" type="submit">Entrar</button>
+        </form>
+        <p class="auth-footnote">Sua música. Sua história. Seu lugar.</p>
+      </div>
+    </div>
+    <span class="auth-credit">Capas de álbuns · Deezer</span>
+  </section>
+  <div id="app-shell" hidden>
+  <header class="header">
+    <div class="identity">
+      <a class="brand" href="#foryou" aria-label="Ressoa, início">ress<span class="brand-disc"><span class="sr-only">o</span></span>a</a>
+      <span class="slogan">o que a música te faz sentir</span>
+    </div>
+    <div class="header-controls">
+    <nav class="main-nav" aria-label="Principal">
+      <a href="#foryou" data-page="foryou">For you</a>
+      <a href="#diario" data-page="diario">Meus sons</a>
+    </nav>
+    <div class="people-search" id="people-search">
+      <button type="button" class="icon-button" id="toggle-people-search" aria-label="Buscar pessoas" aria-expanded="false" aria-controls="people-search-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button>
+      <label class="sr-only" for="people-query">Buscar pessoas por nome ou usuário</label>
+      <div class="people-search-field" id="people-search-field"><span id="people-search-icon" aria-hidden="true"></span><input id="people-query" type="search" placeholder="Buscar pessoas" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="people-results"><button type="button" id="clear-people-search" aria-label="Limpar busca de pessoas" hidden>×</button></div>
+      <div id="people-search-panel" class="people-search-panel" hidden><p id="people-search-status" role="status"></p><div id="people-results" role="listbox" aria-label="Pessoas encontradas"></div></div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-button requests-button" id="follow-requests-button" aria-label="Solicitações para seguir"><span aria-hidden="true"></span><span id="request-count" class="request-count" hidden></span></button>
+      <a class="icon-button profile-shortcut" href="#perfil" data-page="perfil" aria-label="Meu perfil" title="Meu perfil"><span class="profile-avatar" aria-hidden="true"></span></a>
+    </div>
+    </div>
+  </header>
+  <main>
+    <section id="for-you" aria-label="For you">
+      <div class="feed-tools"><span class="local-status" id="account-status">Conectado</span><button class="icon-button" id="refresh-feed" aria-label="Atualizar feed" title="Atualizar feed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c0-1.7 2.2-2.5 3.5-1.3 1.8 1.6.6 4.7-1.8 5.3-3.4.9-6.9-1.6-6.9-5.1 0-4.4 5-7.5 9.2-5.7 3.1 1.3 4.9 4.5 4.3 7.8-.9 4.9-6.4 8-11 6.1m2.9-1.4-2.9 1.4 1.4 2.9"/></svg></button></div>
+      <div id="feed-empty" class="feed-empty" hidden><h1>Nenhum Ressoa novo.</h1><a class="button" href="#diario">Escrever uma ressoa</a></div>
+      <div class="story-progress" id="story-progress" aria-label="Publicações"></div>
+      <div class="story-viewport" id="story-viewport">
+        <div id="story-track" class="story-track"></div>
+      </div>
+      <p class="sr-only" id="story-position" role="status" aria-live="polite" aria-atomic="true"></p>
+    </section>
+    <section id="diary" aria-labelledby="diary-title" hidden>
+      <div class="diary-heading">
+        <h1 id="diary-title">Meus sons</h1>
+        <button class="button primary" id="write-entry">Escrever uma ressoa <span aria-hidden="true">＋</span></button>
+      </div>
+      <section class="weekly-setting" aria-labelledby="weekly-title">
+        <div class="weekly-label"><h2 id="weekly-title">Ressoa da semana</h2></div>
+        <div id="weekly-selection"></div>
+        <button class="text-button" id="define-weekly">Definir</button>
+        <button class="text-button" id="delete-weekly" hidden>Apagar</button>
+      </section>
+      <p class="form-note" id="weekly-lock-note"></p>
+      <div class="diary-toolbar">
+        <div class="diary-filters" aria-label="Conteúdo do diário">
+          <button data-collection="entries" aria-pressed="true">Minhas ressoas</button>
+          <button data-collection="saved" aria-pressed="false">Guardadas</button>
+        </div>
+        <label class="search">
+          <span id="search-icon" aria-hidden="true"></span>
+          <input id="search" type="search" placeholder="Buscar" aria-label="Buscar no diário">
+        </label>
+      </div>
+      <div id="diary-entries"></div>
+    </section>
+    <section id="profile" aria-label="Perfil" hidden>
+      <div class="profile-heading"><span class="section-label" id="profile-label">Meu perfil</span><div class="account-commands"><a class="text-button" id="back-my-profile" href="#perfil" hidden>Meu perfil</a><button class="text-button" id="edit-profile">Editar perfil</button><button class="text-button" id="logout">Sair da conta</button><div id="profile-options"></div></div></div>
+      <div id="profile-content"></div>
+    </section>
+  </main>
+  <dialog id="reader" aria-labelledby="reader-title">
+    <button class="close icon-button" data-close="reader" aria-label="Fechar leitura">×</button>
+    <div id="reader-content"></div>
+  </dialog>
+  <dialog id="composer" aria-labelledby="composer-title">
+    <form id="entry-form">
+      <div class="dialog-heading">
+        <h2 id="composer-title">Escrever uma ressoa</h2>
+        <button type="button" class="icon-button" data-close="composer" aria-label="Fechar editor">×</button>
+      </div>
+      <div id="composer-track-picker" class="track-picker"></div>
+      <input type="hidden" name="lyricExcerpt" value=""><div id="entry-excerpt-choice" class="excerpt-choice"></div>
+      <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="6" placeholder="Se quiser, escreva aqui"></textarea></label>
+      <label>Visibilidade<select name="visibility"><option value="private">Só no meu diário</option><option value="public">Pública</option></select></label>
+      <p class="form-note" id="visibility-note">Salvo na sua conta. Respeitamos a visibilidade que você escolher.</p>
+      <button class="button primary" type="submit">Salvar ressoa</button>
+    </form>
+  </dialog>
+  <dialog id="weekly-dialog" aria-labelledby="weekly-dialog-title">
+    <div class="dialog-heading">
+      <h2 id="weekly-dialog-title">Ressoa da semana</h2>
+      <button type="button" class="icon-button" data-close="weekly-dialog" aria-label="Fechar seleção">×</button>
+    </div>
+    <form id="weekly-form">
+      <div id="weekly-track-picker" class="track-picker"></div>
+      <input type="hidden" name="lyricExcerpt" value=""><div id="weekly-excerpt-choice" class="excerpt-choice"></div>
+      <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="4" placeholder="Se quiser, escreva aqui"></textarea></label>
+      <p class="form-note">Uma escolha por semana.</p>
+      <button class="button primary" type="submit">Definir</button>
+    </form>
+  </dialog>
+  <dialog id="lyric-picker" aria-labelledby="lyric-picker-title">
+    <div class="dialog-heading"><h2 id="lyric-picker-title">Trecho da letra</h2><button type="button" class="icon-button" data-close="lyric-picker" aria-label="Fechar trechos">×</button></div>
+    <p class="form-note" id="lyric-track-name"></p><div id="lyric-preview" class="lyric-preview"></div>
+    <p class="form-note" id="lyric-status" role="status"></p><div id="lyric-lines" class="lyric-lines"></div>
+    <label class="lyric-field" for="lyric-selection">Trecho escolhido <span id="lyric-count">0/120</span></label>
+    <textarea id="lyric-selection" maxlength="120" rows="3" placeholder="Até 3 versos"></textarea>
+    <p id="lyric-selection-error" class="form-note" role="alert"></p><div class="dialog-actions"><button class="button primary" id="use-lyric" disabled>Usar trecho</button></div>
+  </dialog>
+  <dialog id="music-dialog" aria-labelledby="music-title">
+    <button class="close icon-button" data-close="music-dialog" aria-label="Fechar música">×</button>
+    <div id="music-content"></div>
+  </dialog>
+  <dialog id="profile-editor" aria-labelledby="profile-editor-title">
+    <form id="profile-form">
+      <div class="dialog-heading"><h2 id="profile-editor-title">Editar perfil</h2><button type="button" class="icon-button" data-close="profile-editor" aria-label="Fechar perfil">×</button></div>
+      <div class="photo-editor"><span id="photo-preview"></span><button type="button" class="text-button" id="choose-photo">Escolher foto</button><input id="profile-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden><button type="button" class="text-button" id="remove-photo">Remover foto</button></div>
+      <label>Nome<input name="displayName" required minlength="2" maxlength="50" autocomplete="name"></label>
+      <label>Nome de usuário<input name="handle" required pattern="[a-z0-9._]{3,24}" minlength="3" maxlength="24" autocapitalize="none" spellcheck="false" title="Use 3 a 24 letras minúsculas, números, ponto ou sublinhado."></label>
+      <label>Bio<textarea name="bio" maxlength="180" rows="3"></textarea></label>
+      <label class="checkbox-label"><input type="checkbox" name="isPrivate">Perfil privado</label>
+      <p class="form-note">Somente seguidores aprovados veem seus Ressoas e reposts. Seguidores atuais são mantidos; você pode removê-los no perfil.</p>
+      <fieldset id="favorite-fields"><legend>Músicas favoritas · até 6</legend></fieldset>
+      <fieldset class="background-fields"><legend>Capa de fundo</legend><div id="background-track-picker" class="track-picker"></div><button class="text-button" id="remove-background" type="button">Remover fundo</button></fieldset>
+      <p class="form-note">As alterações serão salvas na sua conta.</p>
+      <button class="button primary" type="submit">Salvar perfil</button>
+    </form>
+  </dialog>
+  <dialog id="edit-publish-dialog" aria-labelledby="edit-publish-title">
+    <div class="dialog-heading"><h2 id="edit-publish-title">Postar de novo?</h2><button type="button" class="icon-button" data-close="edit-publish-dialog" aria-label="Voltar à edição">×</button></div>
+    <p class="form-note">As interações anteriores serão removidas. Postar de novo renova as 24 horas no For you.</p>
+    <div class="dialog-actions"><button type="button" class="button" id="edit-publish-only">Salvar sem postar</button><button type="button" class="button primary" id="edit-publish-again">Salvar e postar de novo</button></div>
+  </dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-message" class="form-note"></p><div class="dialog-actions"><button class="button" data-close="confirm-dialog">Cancelar</button><button class="button primary" id="confirm-action">Apagar</button></div></dialog>
+  <dialog id="people-dialog" aria-labelledby="people-title"><div class="dialog-heading"><h2 id="people-title">Curtidas e reposts</h2><button class="icon-button" data-close="people-dialog" aria-label="Fechar pessoas">×</button></div><div id="people-content"></div></dialog>
+  <dialog id="share-dialog" aria-labelledby="share-title"><div class="dialog-heading"><h2 id="share-title">Compartilhar ressoa</h2><button class="icon-button" data-close="share-dialog" aria-label="Fechar compartilhamento">×</button></div><div id="share-preview"></div><p id="share-status" class="form-note" role="status"></p><div class="dialog-actions"><button type="button" class="button primary" id="download-share" disabled>Baixar ressoa</button><button type="button" class="button" id="copy-share-link">Copiar link</button></div></dialog>
+  <div id="spotify-controller-host" aria-hidden="true"></div>
+  <div id="toast" role="status" hidden></div>
+  </div>
+</body>
+</html>
