@@ -98,9 +98,11 @@ class Application:
 
     def dispatch(self, env):
         path, method = env.get('PATH_INFO', '/'), env['REQUEST_METHOD']
-        if path == '/healthz' and method == 'GET':
-            with self.db.connect() as db:
-                db.execute('SELECT 1').fetchone()
+        if path in ('/healthz', '/readyz') and method in ('GET', 'HEAD'):
+            # Frequent liveness checks must not keep the Neon compute awake.
+            if path == '/readyz':
+                with self.db.connect() as db:
+                    db.execute('SELECT 1').fetchone()
             return 200, {'ok': True}, []
         if not path.startswith('/api/'):
             if method not in ('GET', 'HEAD'):

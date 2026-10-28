@@ -74,10 +74,12 @@ A versão online roda no **Render**, com os dados no **Neon**. O Dockerfile defi
 | `DATABASE_URL` | Conexão PostgreSQL do Neon, cadastrada como segredo no Render |
 | `APP_ORIGIN` | URL HTTPS de um domínio próprio, quando utilizado |
 
-No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`. O servidor escuta em `0.0.0.0:$PORT`, e `/healthz` verifica a conexão com o banco.
+No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`. O servidor escuta em `0.0.0.0:$PORT`.
+
+`/healthz` confirma que o servidor está respondendo, sem abrir conexão com o banco. É o endereço usado pelo Render e indicado para um monitor externo a cada cinco minutos. `/readyz` verifica também o acesso ao PostgreSQL e serve para diagnóstico; consulte-o quando necessário, para permitir que o Neon suspenda o processamento durante períodos sem uso.
 
 Contas e publicações permanecem no Neon ao atualizar a aplicação. Uma instalação nova cria apenas as tabelas, sem usuários ou Ressoas de exemplo. O banco local e as credenciais ficam fora do Git. A retenção dos backups de produção é configurada no próprio Neon.
 
-Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos.
+Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos. Um monitor externo pode reduzir essa espera, sujeito aos limites do plano. O monitor precisa estar configurado e ativo fora da aplicação; este repositório não instala agendamentos por conta própria.
 
 Recuperação de senha por e-mail e ferramentas de moderação ainda não estão implementadas.
