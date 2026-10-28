@@ -1,4 +1,4 @@
-import { tracks, musicDetails, registerTrack, useAccountCatalog } from './catalog-store.js';
+import { tracks, musicDetails, registerTrack, resetCatalog } from './catalog-store.js';
 
 let snapshot = null;
 const values = new Map();
@@ -43,7 +43,7 @@ export function hydratePublicProfile(data) {
 }
 
 export function setSnapshot(data, first = false) {
-  if (first) useAccountCatalog();
+  if (first) resetCatalog();
   snapshot = data;
   values.set('ressoa.entries', data.entries.map(post => localPost(post, true)));
   values.set('ressoa.public', data.publicPosts.map(post => localPost(post)));

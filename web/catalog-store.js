@@ -1,11 +1,5 @@
-﻿import { tracks as originalTracks } from './data.js';
-import { musicDetails as originalDetails } from './music.js';
-
-export const tracks = [...originalTracks];
-export const musicDetails = originalDetails.map((detail, index) => ({ ...detail, provider: 'spotify', catalogId: `spotify:${detail.id}`, duration: [218, 296, 206, 165, 196, 215][index], instrumental: index === 0 }));
-const baseLength = tracks.length;
-const key = 'ressoa.catalog';
-let accountMode = false;
+export const tracks = [];
+export const musicDetails = [];
 
 function httpsAsset(value, type) {
   try {
@@ -31,44 +25,26 @@ export function sanitizeTrack(value) {
     url: value.provider === 'spotify' ? `https://open.spotify.com/track/${match[1]}` : `https://www.deezer.com/track/${match[1]}`
   };
 }
-function readExternal() {
-  try { const data = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(data) ? data.map(sanitizeTrack).filter(Boolean) : []; }
-  catch { return []; }
-}
 function append(track) {
   tracks.push({ title: track.title, artist: track.artist, album: track.album, year: track.year, duration: track.duration });
   musicDetails.push({ ...track, id: track.spotifyId || track.catalogId.split(':')[1], history: '', meaning: '', credits: '', sources: [] });
 }
-export function reloadCatalog() {
-  if (accountMode) return;
-  tracks.splice(baseLength); musicDetails.splice(baseLength);
-  for (const track of readExternal()) append(track);
-}
 export function registerTrack(value) {
   const track = sanitizeTrack(value);
   if (!track) throw new Error('Não foi possível selecionar esta música.');
-  reloadCatalog();
   const existing = musicDetails.findIndex(detail => detail.catalogId === track.catalogId);
   if (existing >= 0) {
-    // Enrich existing tracks without discarding curated histories or richer metadata.
-    if (existing >= baseLength) {
-      const detail=musicDetails[existing];
-      for(const [key,value] of Object.entries(track)) {
-        if (value !== '' && value !== null && (!Array.isArray(value)||value.length) && (typeof value!=='number'||value>0)) detail[key]=value;
-      }
-      Object.assign(tracks[existing], {title:detail.title,artist:detail.artist,album:detail.album,year:detail.year,duration:detail.duration});
+    const detail = musicDetails[existing];
+    for (const [key, value] of Object.entries(track)) {
+      if (value !== '' && value !== null && (!Array.isArray(value) || value.length) && (typeof value !== 'number' || value > 0)) detail[key] = value;
     }
+    Object.assign(tracks[existing], {title:detail.title,artist:detail.artist,album:detail.album,year:detail.year,duration:detail.duration});
     return existing;
-  }
-  if (!accountMode) {
-    const all = [...readExternal(), track];
-    localStorage.setItem(key, JSON.stringify(all));
   }
   append(track);
   return tracks.length - 1;
 }
-export function useAccountCatalog() {
-  accountMode = true;
-  tracks.splice(baseLength); musicDetails.splice(baseLength);
+export function resetCatalog() {
+  tracks.length = 0;
+  musicDetails.length = 0;
 }
-reloadCatalog();

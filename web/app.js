@@ -1,4 +1,4 @@
-import { tracks, musicDetails, reloadCatalog } from './catalog-store.js';
+import { tracks, musicDetails } from './catalog-store.js';
 import { createTrackPicker } from './track-picker.js';
 import { weekKey, nextWeekLabel, lockedForWeek } from './weekly.js';
 import { createPlayback } from './playback.js';
