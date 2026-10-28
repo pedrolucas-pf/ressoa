@@ -70,19 +70,6 @@ ressoa/
 └── render.yaml             # Configuração de hospedagem
 ```
 
-## Rodar localmente
-
-Requer **Python 3.10 ou superior**. Para usar o banco local, basta clonar o repositório e iniciar o servidor:
-
-```sh
-git clone https://github.com/pedrolucas-pf/ressoa.git
-cd ressoa
-python serve.py
-```
-
-Abra **http://localhost:8000**. O banco SQLite é criado em `storage/ressoa.sqlite3` na primeira execução. A busca de músicas, as capas, as letras e os players precisam de conexão com a internet.
-
-Para executar com PostgreSQL, instale as dependências de `requirements.txt` e configure `DATABASE_URL` no ambiente. As variáveis estão descritas em [`.env.example`](.env.example); o servidor não carrega arquivos `.env` automaticamente.
 
 ## Testes
 
