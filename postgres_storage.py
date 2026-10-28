@@ -89,6 +89,33 @@ class PostgresConnection:
             self.close()
 
 
+class ConnectionLease:
+    """Independent query caches over the connection owned by one HTTP request."""
+    def __init__(self, connection):
+        self._connection = connection
+        self._track_cache = {}
+        self._person_cache = {}
+
+    def execute(self, statement, parameters=None):
+        return self._connection.execute(statement, parameters)
+
+    def commit(self):
+        self._connection.commit()
+
+    def rollback(self):
+        self._connection.rollback()
+
+    def close(self):
+        # The request scope closes the underlying connection after all operations.
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        self.rollback() if kind else self.commit()
+
+
 SEARCH_FUNCTION = r"""
 CREATE OR REPLACE FUNCTION search_key(value TEXT) RETURNS TEXT
 LANGUAGE SQL IMMUTABLE PARALLEL SAFE AS $ressoa$

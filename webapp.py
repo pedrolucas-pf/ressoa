@@ -3,6 +3,7 @@ import json
 import logging
 import mimetypes
 import os
+from contextlib import nullcontext
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -36,7 +37,9 @@ class Application:
         if self.production:
             headers.append(('Strict-Transport-Security', 'max-age=31536000'))
         try:
-            status, body, extra = self.dispatch(env)
+            scope = self.db.request_scope() if env.get('PATH_INFO', '').startswith('/api/') else nullcontext()
+            with scope:
+                status, body, extra = self.dispatch(env)
             headers.extend(extra)
         except APIError as error:
             status, body = error.status, dict(error=error.message)

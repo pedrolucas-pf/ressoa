@@ -10,6 +10,7 @@ import time
 import uuid
 import unicodedata
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -139,6 +140,7 @@ class Connection(sqlite3.Connection):
 class Database:
     def __init__(self, path):
         self.source=path
+        self._request_state = ContextVar('ressoa_database_request', default=None)
         self.is_postgres=str(path).startswith(('postgres://','postgresql://'))
         if self.is_postgres:
             from postgres_storage import initialize
@@ -171,10 +173,29 @@ class Database:
         # All queries using this condition alias posts as p and their owner as u.
         return '(u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows access WHERE access.user_id=? AND access.target_id=p.owner_id))',(viewer_id,viewer_id)
 
+    @contextmanager
+    def request_scope(self):
+        if not self.is_postgres or self._request_state.get() is not None:
+            yield
+            return
+        state = {}
+        token = self._request_state.set(state)
+        try:
+            yield
+        finally:
+            self._request_state.reset(token)
+            if state.get('connection') is not None:
+                state['connection'].close()
+
     def connect(self):
         if self.is_postgres:
-            from postgres_storage import PostgresConnection
-            return PostgresConnection(self._dsn)
+            from postgres_storage import PostgresConnection, ConnectionLease
+            state = self._request_state.get()
+            if state is None:
+                return PostgresConnection(self._dsn)
+            if 'connection' not in state:
+                state['connection'] = PostgresConnection(self._dsn)
+            return ConnectionLease(state['connection'])
         db = sqlite3.connect(self.path, timeout=15, factory=Connection)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
@@ -424,10 +445,14 @@ class Database:
         republish_id=data.get('republish')
         if republish_id is not None and (not isinstance(republish_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',republish_id)):
             raise APIError(400,'Ressoa para republicar inválido.')
+        clear_draft = data.get('clearDraft', False)
+        if type(clear_draft) is not bool:
+            raise APIError(400, 'Opção de rascunho inválida.')
         with self.transaction() as db:
-            version = db.execute('SELECT entries_version FROM users WHERE id=?', (user_id,)).fetchone()[0]
-            if data.get('version') != version:
+            user = db.execute('SELECT entries_version,pinned FROM users WHERE id=?', (user_id,)).fetchone()
+            if data.get('version') != user['entries_version']:
                 raise APIError(409, 'Seu diário mudou em outro dispositivo. Atualizamos os dados; tente novamente.')
+            previous = {row['id']: row for row in db.execute("SELECT * FROM posts WHERE owner_id=? AND kind='entry'", (user_id,)).fetchall()}
             ids = set()
             for item in items:
                 if not isinstance(item, dict):
@@ -436,10 +461,15 @@ class Database:
                 if not re.fullmatch(r'[A-Za-z0-9_-]+', post_id) or post_id in ids:
                     raise APIError(400, 'Identificador inválido ou repetido.')
                 ids.add(post_id)
-                existing = db.execute('SELECT * FROM posts WHERE id=?', (post_id,)).fetchone()
+                existing = previous.get(post_id)
+                if existing is None:
+                    existing = db.execute('SELECT * FROM posts WHERE id=?', (post_id,)).fetchone()
                 if existing and (existing['owner_id'] != user_id or existing['kind'] != 'entry'):
                     raise APIError(403, 'Você só pode alterar suas próprias ressoas.')
-                track_id, message = self.store_track(db, item.get('track')), text(item.get('text',''), 0, 2400)
+                track = clean_track(item.get('track'))
+                track_id, message = track['catalogId'], text(item.get('text',''), 0, 2400)
+                if not existing or existing['track_id'] != track_id:
+                    self.store_track(db, track)
                 excerpt=self.clean_excerpt(item.get('lyricExcerpt',existing['lyric_excerpt'] if existing and existing['track_id']==track_id else ''))
                 visibility = item.get('visibility')
                 if visibility not in ('public', 'private'):
@@ -450,6 +480,8 @@ class Database:
                     raise APIError(400,'Só é possível republicar uma entrada existente do perfil.')
                 if post_id==republish_id and not changed:
                     raise APIError(400,'Altere o Ressoa antes de postar de novo.')
+                if not changed:
+                    continue
                 published=now_iso() if not existing or (visibility=='public' and existing['visibility']=='private') else existing['feed_published_at']
                 if post_id==republish_id:published=now_iso()
                 db.execute("INSERT INTO posts (id,owner_id,track_id,text,visibility,kind,created_at,updated_at,lyric_excerpt,feed_published_at) VALUES (?,?,?,?,?,'entry',?,?,?,?) ON CONFLICT(id) DO UPDATE SET track_id=excluded.track_id,text=excluded.text,visibility=excluded.visibility,updated_at=excluded.updated_at,lyric_excerpt=excluded.lyric_excerpt,feed_published_at=excluded.feed_published_at", (post_id, user_id, track_id, message, visibility, existing['created_at'] if existing else timestamp, timestamp,excerpt,published))
@@ -460,13 +492,12 @@ class Database:
                     db.execute('DELETE FROM actions WHERE post_id=? AND user_id<>?', (post_id, user_id))
             if republish_id is not None and republish_id not in ids:
                 raise APIError(400,'O Ressoa para republicar não está nesta edição.')
-            for row in db.execute("SELECT id FROM posts WHERE owner_id=? AND kind='entry'", (user_id,)).fetchall():
-                if row['id'] not in ids:
-                    db.execute('DELETE FROM posts WHERE id=?', (row['id'],))
-            pinned = json.loads(db.execute('SELECT pinned FROM users WHERE id=?', (user_id,)).fetchone()[0])
+            for identifier in previous.keys() - ids:
+                db.execute('DELETE FROM posts WHERE id=?', (identifier,))
+            pinned = json.loads(user['pinned'])
             public_ids = {item['id'] for item in items if item.get('visibility') == 'public'}
             clean_pins = [key for key in pinned if key in public_ids]
-            db.execute('UPDATE users SET entries_version=entries_version+1,pinned=?,profile_version=profile_version+? WHERE id=?', (json.dumps(clean_pins), int(clean_pins != pinned), user_id))
+            db.execute("UPDATE users SET entries_version=entries_version+1,pinned=?,profile_version=profile_version+?,draft=CASE WHEN ? THEN '{}' ELSE draft END WHERE id=?", (json.dumps(clean_pins), int(clean_pins != pinned), clear_draft, user_id))
 
     def save_profile(self, user_id, data):
         value = data.get('value')

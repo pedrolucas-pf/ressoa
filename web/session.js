@@ -75,7 +75,7 @@ export function mutate(path, method, body) {
 }
 
 export async function writeAccount(key, value, options={}) {
-  if (key === 'ressoa.entries') return mutate('/api/entries', 'PUT', { value: value.map(wirePost), version: snapshot.versions.entries,republish:options.republish });
+  if (key === 'ressoa.entries') return mutate('/api/entries', 'PUT', { value: value.map(wirePost), version: snapshot.versions.entries,republish:options.republish,clearDraft:options.clearDraft });
   if (key === 'ressoa.profile') return mutate('/api/profile', 'PUT', { value: { ...value, favorites: value.favorites.map(wireTrack), background: wireTrack(value.background) }, version: snapshot.versions.profile });
   if (key === 'ressoa.weekly') return value.deletedAt
     ? mutate('/api/weekly', 'DELETE', {}) : mutate('/api/weekly', 'POST', wirePost(value.item));

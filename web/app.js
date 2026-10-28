@@ -504,7 +504,6 @@ form.addEventListener('submit', async event => {
   } else {
     entry = makeEntry(composerPicker.value, text, form.elements.visibility.value,form.elements.lyricExcerpt.value);
     if (!await saveNewEntry(entry)) return;
-    await write('ressoa.draft', {});
   }
   const wasEditing = Boolean(editingId); editingId = null;
   form.reset(); $('#composer').close();
@@ -523,7 +522,7 @@ async function saveNewEntry(entry,feature=false) {
   const item={...entry,kind:'weekly',ownerId:'me'};const selection={postId:item.id,item,weekKey:weekKey(),selectedAt:new Date().toISOString()};
   return await write('ressoa.weekly',selection);
  }
- const updated=[entry,...entries];return await write('ressoa.entries',updated);
+ const updated=[entry,...entries];return await write('ressoa.entries',updated,true,{clearDraft:true});
 }
 function mountStoryPreview() {
  if(page!=='foryou'||document.querySelector('dialog[open]'))return;
