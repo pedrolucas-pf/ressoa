@@ -6,11 +6,9 @@
 
 Um diário musical para guardar lembranças, compartilhar sentimentos e descobrir pessoas através da música.
 
-[Acessar o Ressoa](https://ressoa.onrender.com) · [Funcionalidades](#funcionalidades) · [Tecnologias](#tecnologias) · [Rodar localmente](#rodar-localmente)
+[Acessar o Ressoa](https://ressoa.onrender.com) · [Funcionalidades](#funcionalidades) · [Tecnologias](#tecnologias) · [Hospedagem](#hospedagem)
 
 </div>
-
-[![Tela de entrada do Ressoa, com capas de MPB e rock brasileiro ao fundo](docs/images/ressoa-login.png)](https://ressoa.onrender.com)
 
 ## Sobre o projeto
 
@@ -42,7 +40,6 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 | Banco de produção | PostgreSQL no Neon, com Psycopg |
 | Servidor | Gunicorn em contêiner Docker, hospedado no Render |
 | Música | Catálogo e prévias Deezer, embeds Spotify e letras via LRCLIB |
-| Testes | unittest e Playwright com Chrome |
 
 ### Como funciona
 
@@ -57,9 +54,6 @@ As senhas são armazenadas com PBKDF2-SHA256. As sessões usam cookies HttpOnly 
 ```text
 ressoa/
 ├── web/                    # Interface, módulos JavaScript, estilos e assets
-├── docs/                   # Documentação e imagens do projeto
-├── scripts/                # Verificação, backup e manutenção do catálogo
-├── tests/                  # Testes de API e regras do aplicativo
 ├── webapp.py               # Aplicação WSGI e rotas HTTP
 ├── database.py             # Persistência e regras de negócio
 ├── postgres_storage.py     # Adaptação das consultas para PostgreSQL
@@ -70,36 +64,20 @@ ressoa/
 └── render.yaml             # Configuração de hospedagem
 ```
 
+## Hospedagem
 
-## Testes
+A versão online roda no **Render**, com os dados no **Neon**. O Dockerfile define a imagem e o comando do Gunicorn; `render.yaml` contém a configuração do serviço.
 
-A suíte de API usa bancos temporários e cobre autenticação, persistência, privacidade, seguidores, edições, interações e o destaque semanal:
+| Variável | Valor em produção |
+| --- | --- |
+| `RESSOA_ENV` | `production` |
+| `DATABASE_URL` | Conexão PostgreSQL do Neon, cadastrada como segredo no Render |
+| `APP_ORIGIN` | URL HTTPS de um domínio próprio, quando utilizado |
 
-```sh
-python -m unittest discover -s tests -v
-```
+No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`. O servidor escuta em `0.0.0.0:$PORT`, e `/healthz` verifica a conexão com o banco.
 
-Para verificar também a interface, é necessário ter Chrome instalado e preparar as ferramentas:
+Contas e publicações permanecem no Neon ao atualizar a aplicação. Uma instalação nova cria apenas as tabelas, sem usuários ou Ressoas de exemplo. O banco local e as credenciais ficam fora do Git. A retenção dos backups de produção é configurada no próprio Neon.
 
-```sh
-python -m pip install --target .tools playwright pillow "psycopg[binary]==3.3.6"
-python scripts/verify.py
-```
-
-A verificação completa reúne **45 testes de API e sete suítes de navegador**, com fluxos em desktop e celular. O projeto também inclui um runner para testar com PostgreSQL descartável no Windows:
-
-```sh
-python tests/prepare_postgres.py
-python scripts/verify_postgres.py --api-only
-```
-
-Os relatórios e as capturas ficam em `verification/`.
-
-## Hospedagem e documentação
-
-A versão online roda no **Render**, com os dados no **Neon**. O GitHub guarda o código; bancos locais, backups e credenciais ficam fora do repositório. Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos.
-
-- [Configuração e manutenção da hospedagem](docs/DEPLOY.md)
-- [Catálogo musical, áudio, letras e compartilhamento](docs/CATALOG.md)
+Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos.
 
 Recuperação de senha por e-mail e ferramentas de moderação ainda não estão implementadas.

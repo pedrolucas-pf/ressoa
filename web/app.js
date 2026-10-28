@@ -104,7 +104,7 @@ const weeklyPost = () => [myWeeklyPost(),...publicPosts.filter(post=>post.kind==
 const { stopPreview, mountPreview, mountCoverPlayer, toggleCoverPlayer } = createPlayback({ tracks, musicDetails, toast });
 function spotifyBrand(track) {
   if (musicDetails[track].provider !== 'spotify') return `<a class="catalog-attribution" href="${escape(musicDetails[track].url)}" target="_blank" rel="noopener noreferrer">Ouvir no Deezer ↗</a>`;
-  return `<a class="spotify-attribution" href="${escape(musicDetails[track].url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvir ${escape(tracks[track].title)} no Spotify"><img class="spotify-white" src="assets/spotify-white.svg" alt="Spotify" width="74" height="23"><img class="spotify-black" src="assets/spotify-black.svg" alt="Spotify" width="74" height="23"></a>`;
+  return `<a class="spotify-attribution" href="${escape(musicDetails[track].url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvir ${escape(tracks[track].title)} no Spotify"><img src="assets/spotify-white.svg" alt="Spotify" width="74" height="23"></a>`;
 }
 function trackArt(track, size = 400, excerpt = '') {
   return `<button class="cover-open" data-music="${track}" aria-label="Sobre ${escape(tracks[track].title)}${excerpt?' · Trecho: '+escape(excerpt):''}">${albumArt({artwork:cover(track),album:tracks[track].album||tracks[track].title,excerpt,size})}</button>`;

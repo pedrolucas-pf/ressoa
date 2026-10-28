@@ -1,4 +1,4 @@
-"""Local runner. Production uses Gunicorn; see docs/DEPLOY.md."""
+"""Local runner. Production uses Gunicorn; see README.md."""
 import argparse
 import socket
 from ipaddress import IPv4Address

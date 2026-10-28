@@ -213,7 +213,6 @@ form > .button { width: 100%; margin-top: 23px; }
 .track-name:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 5px; }
 .spotify-attribution { display: inline-flex; margin-top: 12px; }
 .spotify-attribution img { width: 74px; height: 23px; object-fit: contain; }
-.spotify-black { display: none; }
 .avatar { overflow: hidden; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 #for-you { padding-bottom: 40px; }
