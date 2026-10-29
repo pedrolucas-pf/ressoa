@@ -1,6 +1,6 @@
-import { api, getAccount, busy, updateNotifications } from './session.js';
+import { api, getAccount, busy, mutate, updateNotifications, refreshPendingFollows } from './session.js';
 
-export function createNotifications({ identity, followButton }) {
+export function createNotifications({ identity, followButton, toast, onFollowChange, onResponse }) {
   const button = document.getElementById('notifications-button');
   const count = document.getElementById('notification-count');
   const dialog = document.getElementById('notifications-dialog');
@@ -11,7 +11,10 @@ export function createNotifications({ identity, followButton }) {
   let items = [], cursor = null, loadedVersion = -1;
   let request = null, generation = 0, reading = false, polling = false;
   let failedAppend = false;
+  let checkingFollows = false;
+  const processing = new Map();
   const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt]);
+  const expired = item => item.kind === 'follow' && item.expiresAt && Date.parse(item.expiresAt) <= Date.now();
 
   function updateBadge() {
     const total = getAccount().notifications?.unreadCount || 0;
@@ -21,6 +24,7 @@ export function createNotifications({ identity, followButton }) {
   }
 
   function render() {
+    items = items.filter(item => !expired(item));
     content.innerHTML = items.length ? items.map(item => {
       const row = document.createElement('div');
       row.className = `person-row request-row notification-row${item.unread ? ' unread' : ''}`;
@@ -32,7 +36,7 @@ export function createNotifications({ identity, followButton }) {
       message.textContent = item.kind === 'request' ? 'Quer seguir você' : 'Começou a seguir você';
       const time = document.createElement('time');
       time.dateTime = item.createdAt;
-      time.textContent = new Date(item.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      time.textContent = new Date(item.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
       details.append(message, time);
       const actions = document.createElement('div');
       actions.className = 'request-actions';
@@ -45,13 +49,67 @@ export function createNotifications({ identity, followButton }) {
         }
       } else actions.innerHTML = followButton(item.person);
       row.append(actions);
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button'; dismiss.className = 'icon-button notification-dismiss';
+      dismiss.textContent = '×';
+      const label = item.kind === 'request' ? 'Excluir solicitação' : 'Remover notificação';
+      dismiss.setAttribute('aria-label', `${label} de @${item.person.handle}`);
+      dismiss.title = label;
+      dismiss.dataset[item.kind === 'request' ? 'declineRequest' : 'dismissNotification'] = item.person.id;
+      row.append(dismiss);
+      const waiting = processing.get(key(item));
+      if (waiting) {
+        row.setAttribute('aria-busy', 'true');
+        row.querySelectorAll('button').forEach(action => action.disabled = true);
+        const action = row.querySelector(waiting === 'accept' ? '[data-accept-request]' : '.request-actions [data-decline-request]');
+        if (action) action.textContent = waiting === 'accept' ? 'Confirmando…' : 'Excluindo…';
+      }
       return row.outerHTML;
     }).join('') : '<p class="empty">Nenhuma notificação por enquanto.</p>';
     more.hidden = !cursor;
   }
 
+  content.addEventListener('click', async event => {
+    const control = event.target.closest('[data-accept-request], [data-decline-request], [data-dismiss-notification]');
+    if (!control) return;
+    event.preventDefault(); event.stopPropagation();
+    const rowKey = control.closest('[data-notification]').dataset.notification;
+    const item = items.find(item => key(item) === rowKey);
+    if (!item || processing.has(rowKey)) return;
+    const accept = control.hasAttribute('data-accept-request');
+    const owner = getAccount().user.id;
+    processing.set(rowKey, item.kind === 'request' ? accept ? 'accept' : 'decline' : 'dismiss');
+    request?.abort(); request = null; generation++;
+    content.removeAttribute('aria-busy'); more.disabled = false;
+    status.textContent = ''; retry.hidden = true;
+    render();
+    try {
+      const result = item.kind === 'request'
+        ? await mutate('/api/follow-request', 'POST', { requester: item.person.id, accept, createdAt: item.createdAt, compact: true })
+        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt });
+      if (owner !== getAccount().user.id) return;
+      updateNotifications(result.summary, owner);
+      items = items.filter(item => key(item) !== rowKey);
+      const notice = result.followResponse?.notification;
+      if (notice && !items.some(item => key(item) === key(notice))) items.unshift(notice);
+      if (result.followResponse) onResponse?.();
+      status.textContent = ''; retry.hidden = true;
+    } catch (error) {
+      if (owner === getAccount().user.id) {
+        toast(error.message);
+        if (error.status === 404) {
+          processing.delete(rowKey);
+          void load();
+        }
+      }
+    } finally {
+      processing.delete(rowKey);
+      if (owner === getAccount().user.id) { render(); void readVisible(); }
+    }
+  });
+
   async function readVisible() {
-    if (reading || !dialog.open) return;
+    if (reading || processing.size || !dialog.open) return;
     const unread = items.filter(item => item.unread).slice(0, 50);
     if (!unread.length) return;
     reading = true;
@@ -74,7 +132,7 @@ export function createNotifications({ identity, followButton }) {
   }
 
   async function load(append = false) {
-    if (!dialog.open) return;
+    if (!dialog.open || processing.size) return;
     request?.abort();
     request = new AbortController();
     const token = ++generation, owner = getAccount().user.id;
@@ -107,29 +165,40 @@ export function createNotifications({ identity, followButton }) {
   }
 
   async function poll() {
-    if (document.hidden || polling || busy() || request) return;
+    if (document.hidden || polling || busy() || request || processing.size) return;
     polling = true;
     const owner = getAccount().user.id;
     try {
       const { summary } = await api('/api/notifications?summary=1');
       if (owner !== getAccount().user.id) return;
       updateNotifications(summary, owner);
-      if (dialog.open && loadedVersion !== getAccount().notifications.version) await load();
+      if (dialog.open && (loadedVersion !== getAccount().notifications.version || items.some(expired))) await load();
       else if (dialog.open) void readVisible();
     } catch { /* Keep the last confirmed counter during a temporary connection failure. */ }
     finally { polling = false; }
   }
 
+  async function pollPendingFollows() {
+    if (document.hidden || checkingFollows || busy() || !getAccount().social.requested?.length) return;
+    checkingFollows = true;
+    try { if (await refreshPendingFollows()) onFollowChange?.(); }
+    catch { /* A failed check leaves the last confirmed follow state intact. */ }
+    finally { checkingFollows = false; }
+  }
+
   button.addEventListener('click', () => {
+    dialog.showModal();
+    if (processing.size) { render(); return; }
     items = []; cursor = null; content.replaceChildren(); more.hidden = true;
-    dialog.showModal(); void load();
+    void load();
   });
   dialog.addEventListener('close', () => { request?.abort(); request = null; generation++; });
   more.addEventListener('click', () => void load(true));
   retry.addEventListener('click', () => void load(failedAppend));
   window.addEventListener('accountchange', updateBadge);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { void poll(); void pollPendingFollows(); } });
   setInterval(poll, 30000);
+  setInterval(pollPendingFollows, 5000);
   updateBadge();
   return { refresh: () => load() };
 }

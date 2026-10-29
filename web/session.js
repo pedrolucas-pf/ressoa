@@ -7,6 +7,7 @@ let queue = Promise.resolve();
 let pending = 0;
 let mutationRevision = 0, accountRevision = 0;
 let localSeen = {};
+let followStatusOffset = 0;
 const actions = new Map();
 const actionJobs = new Set();
 export const getAccount = () => snapshot;
@@ -49,7 +50,7 @@ export function hydratePublicProfile(data) {
 }
 
 export function setSnapshot(data, first = false) {
-  if (first) { resetCatalog(); cancelSeen(); actions.clear(); accountRevision++; localSeen={}; }
+  if (first) { resetCatalog(); cancelSeen(); actions.clear(); accountRevision++; localSeen={}; followStatusOffset=0; }
   const seen={...data.social.seen};
   for(const [id,stamp] of Object.entries(localSeen))seen[id]=Math.max(stamp,seen[id]||0);
   data={...data,social:{...data.social,seen:Object.fromEntries(Object.entries(seen).filter(([,stamp])=>Date.now()-stamp<7*86400000).sort((a,b)=>b[1]-a[1]).slice(0,300))}};
@@ -65,6 +66,40 @@ export function updateNotifications(summary, userId) {
   if (JSON.stringify(confirmed.notifications) === JSON.stringify(summary)) return;
   confirmed = { ...confirmed, notifications: summary };
   publishSnapshot();
+}
+
+function applyFollowResponse({ followResponse, summary }) {
+  const { person, accepted } = followResponse;
+  const followers = confirmed.followersPeople.filter(item => item.id !== person.id);
+  if (accepted) followers.push(person);
+  confirmed = { ...confirmed, followersPeople: followers,
+    followRequests: confirmed.followRequests.filter(item => item.id !== person.id),
+    notifications: summary.version >= (confirmed.notifications?.version || 0) ? summary : confirmed.notifications };
+  publishSnapshot();
+}
+
+export async function refreshPendingFollows() {
+  if (pending || !confirmed?.social.requested?.length) return false;
+  const generation = accountRevision, revision = mutationRevision;
+  const waiting = confirmed.social.requested;
+  followStatusOffset %= waiting.length;
+  const targets = [...waiting.slice(followStatusOffset), ...waiting.slice(0, followStatusOffset)].slice(0, 50);
+  followStatusOffset = (followStatusOffset + targets.length) % waiting.length;
+  const { people } = await api(`/api/follow-status?${new URLSearchParams({ users: targets.join(',') })}`);
+  if (pending || generation !== accountRevision || revision !== mutationRevision) return false;
+  const changes = people.filter(item => item.status !== 'requested');
+  if (!changes.length) return false;
+  const following = new Set(confirmed.social.following), requested = new Set(confirmed.social.requested);
+  const followingPeople = new Map(confirmed.followingPeople.map(person => [person.id, person]));
+  for (const { person, status } of changes) {
+    requested.delete(person.id);
+    if (status === 'following') { following.add(person.id); followingPeople.set(person.id, person); }
+  }
+  mutationRevision++;
+  confirmed = { ...confirmed, followingPeople: [...followingPeople.values()],
+    social: { ...confirmed.social, following: [...following], requested: [...requested] } };
+  publishSnapshot();
+  return true;
 }
 
 function publishSnapshot(full = false) {
@@ -126,6 +161,7 @@ export function mutate(path, method, body, concurrent = false) {
       const result = await api(path, { method, body: payload });
       if (generation === accountRevision) {
         if (result.action) applyAction(result);
+        else if (result.followResponse) applyFollowResponse(result);
         else if (result.user && concurrent) {
           const post = [...result.entries, ...result.publicPosts, ...(result.weekly?.item ? [result.weekly.item] : [])].find(post => post.id === payload.target);
           applyAction({ action: payload, post });

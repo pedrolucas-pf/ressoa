@@ -242,6 +242,12 @@ class Application:
         if path == '/api/notifications/read' and method == 'POST':
             self.db.limit('notifications-seen:'+user_id,120,60)
             return 200,self.db.read_notifications(user_id,data),[]
+        if path == '/api/notifications' and method == 'DELETE':
+            self.db.limit('notifications-dismiss:'+user_id,120,60)
+            return 200,self.db.dismiss_notification(user_id,data),[]
+        if path == '/api/follow-status' and method == 'GET':
+            self.db.limit('follow-status:'+user_id,90,60)
+            return 200,self.db.following_status(user_id,value('users')),[]
         if method in ('PUT', 'POST', 'DELETE'):
             self.db.limit('write:' + user_id, 180, 60)
             if path == '/api/entries' and method == 'PUT':
@@ -257,7 +263,8 @@ class Application:
                 if data.get('compact') is True and result is not None:
                     return 200, result, []
             elif path == '/api/follow-request' and method == 'POST':
-                self.db.respond_follow(user_id,data)
+                result=self.db.respond_follow(user_id,data)
+                if data.get('compact') is True:return 200,result,[]
             elif path == '/api/follower' and method == 'DELETE':
                 self.db.remove_follower(user_id,data)
             elif path == '/api/preference' and method == 'PUT':

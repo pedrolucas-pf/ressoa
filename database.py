@@ -559,8 +559,8 @@ class Database:
             recent=f"{published_time}>CAST(? AS timestamptz)" if self.is_postgres else f"{published_time}>julianday(?)"
             cutoff=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()
             queries = [
-                ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL) AS unread_followers
-                    FROM users WHERE id=?''', (user_id,)),
+                ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers
+                    FROM users WHERE id=?''', (self.notification_cutoff(),user_id)),
                 ("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)),
                 (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
@@ -778,11 +778,17 @@ class Database:
         requester=text(data.get('requester'),1,100)
         if type(data.get('accept')) is not bool:raise APIError(400,'Resposta inválida.')
         with self.transaction() as db:
-            request=db.execute('SELECT 1 FROM follow_requests WHERE user_id=? AND target_id=?',(requester,user_id)).fetchone()
-            if not request:raise APIError(404,'Essa solicitação não está mais disponível.')
-            if data['accept']:self.add_follow(db,requester,user_id,read=True)
+            request=db.execute('''SELECT u.id,u.display_name,u.username,u.photo,u.is_private,r.created_at
+                FROM follow_requests r JOIN users u ON u.id=r.user_id WHERE r.user_id=? AND r.target_id=?''',(requester,user_id)).fetchone()
+            if not request or (data.get('createdAt') is not None and data['createdAt']!=request['created_at']):
+                raise APIError(404,'Essa solicitação não está mais disponível.')
+            timestamp=self.add_follow(db,requester,user_id,read=True) if data['accept'] else None
             db.execute('DELETE FROM follow_requests WHERE user_id=? AND target_id=?',(requester,user_id))
             self.bump_notifications(db,user_id)
+            person=dict(self.person(request),isPrivate=bool(request['is_private']))
+            return dict(followResponse=dict(person=person,accepted=data['accept'],
+                notification=self.notification_item('follow',person,timestamp) if timestamp else None),
+                summary=self.notification_summary(db.execute(*self.notification_summary_query(user_id)).fetchone()))
 
     def remove_follower(self,user_id,data):
         follower=text(data.get('user'),1,100)
@@ -805,19 +811,29 @@ class Database:
             ('''INSERT INTO follow_notifications VALUES (?,?,?,?) ON CONFLICT(user_id,actor_id)
                 DO UPDATE SET created_at=excluded.created_at,read_at=excluded.read_at RETURNING actor_id''',(user_id,actor_id,timestamp,timestamp if read else None)),
             ('UPDATE users SET notifications_version=notifications_version+1 WHERE id=? RETURNING id',(user_id,))])
+        return timestamp
+
+    @staticmethod
+    def notification_cutoff():
+        return (datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
+
+    @staticmethod
+    def notification_item(kind,person,timestamp,unread=False):
+        return dict(kind=kind,person=person,createdAt=timestamp,unread=unread,
+            expiresAt=(datetime.fromisoformat(timestamp)+timedelta(days=7)).isoformat() if kind=='follow' else None)
 
     @staticmethod
     def notification_summary_query(user_id):
         return ('''SELECT notifications_version AS version,
-            (SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL) AS unread_followers,
-            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(user_id,))
+            (SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
+            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(Database.notification_cutoff(),user_id,))
 
     @staticmethod
     def notification_summary(row):
         return dict(version=row['version'],unreadFollowers=row['unread_followers'],requestCount=row['request_count'],unreadCount=row['unread_followers']+row['request_count'])
 
     def notifications(self,user_id,cursor='',summary_only=False):
-        parameters=[user_id,user_id]
+        parameters=[user_id,user_id,self.notification_cutoff()]
         restriction=''
         if cursor:
             try:
@@ -836,7 +852,7 @@ class Database:
             if not summary_only:
                 queries.append((f'''WITH items AS (
                     SELECT 'request' AS kind,user_id AS actor_id,created_at,NULL AS read_at FROM follow_requests WHERE target_id=?
-                    UNION ALL SELECT 'follow',actor_id,created_at,read_at FROM follow_notifications WHERE user_id=?)
+                    UNION ALL SELECT 'follow',actor_id,created_at,read_at FROM follow_notifications WHERE user_id=? AND created_at>?)
                     SELECT i.kind,i.created_at,i.read_at,u.id,u.display_name,u.username,u.photo,u.is_private
                     FROM items i JOIN users u ON u.id=i.actor_id {restriction}
                     ORDER BY i.created_at DESC,i.kind DESC,i.actor_id DESC LIMIT 51''',tuple(parameters)))
@@ -845,7 +861,7 @@ class Database:
             if summary_only:return dict(summary=summary)
             rows=results[1];items=[]
             for row in rows[:50]:
-                items.append(dict(kind=row['kind'],person=dict(self.person(row),isPrivate=bool(row['is_private'])),createdAt=row['created_at'],unread=row['kind']=='follow' and row['read_at'] is None))
+                items.append(self.notification_item(row['kind'],dict(self.person(row),isPrivate=bool(row['is_private'])),row['created_at'],row['kind']=='follow' and row['read_at'] is None))
             next_cursor=None
             if len(rows)>50:
                 last=rows[49];payload=[last['created_at'],last['kind'],last['id']]
@@ -866,6 +882,27 @@ class Database:
                     AND (actor_id,created_at) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*keys)).fetchall()
                 if changed:self.bump_notifications(db,user_id)
         return self.notifications(user_id,summary_only=True)
+
+    def dismiss_notification(self,user_id,data):
+        actor=text(data.get('actorId'),1,100)
+        timestamp=text(data.get('createdAt'),1,50)
+        with self.transaction() as db:
+            if db.execute('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? AND created_at=? RETURNING actor_id',(user_id,actor,timestamp)).fetchone():
+                self.bump_notifications(db,user_id)
+            return dict(summary=self.notification_summary(db.execute(*self.notification_summary_query(user_id)).fetchone()))
+
+    def following_status(self,user_id,users):
+        if not isinstance(users,str) or len(users)>5100:raise APIError(400,'Pessoas inválidas.')
+        targets=list(dict.fromkeys(users.split(',')))
+        if not 1<=len(targets)<=50 or any(not 1<=len(target)<=100 for target in targets):raise APIError(400,'Pessoas inválidas.')
+        placeholders=','.join('?' for _ in targets)
+        with self.connect() as db:
+            rows=db.execute(f'''SELECT u.id,u.display_name,u.username,u.photo,
+                CASE WHEN EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=u.id) THEN 'following'
+                WHEN EXISTS(SELECT 1 FROM follow_requests r WHERE r.user_id=? AND r.target_id=u.id) THEN 'requested'
+                ELSE 'none' END AS status FROM users u WHERE u.id IN ({placeholders})''',(user_id,user_id,*targets)).fetchall()
+            people={row['id']:dict(person=self.person(row),status=row['status']) for row in rows}
+            return dict(people=[people.get(target,dict(person=dict(id=target),status='none')) for target in targets])
 
     def likes(self, user_id, post_id):
         with self.connect() as db:

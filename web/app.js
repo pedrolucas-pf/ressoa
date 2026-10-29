@@ -1013,7 +1013,12 @@ const showFollowers=target=>showRelations('followers',target);
 function peopleIdentity(person) {
  return `<a class="person-link person-identity" href="${escape(personHref(person.id))}" data-person="${escape(person.id)}">${profileAvatar(person.photo,person.displayName)}<span>${escape(person.displayName)}<small>@${escape(person.handle)}</small></span></a>`;
 }
-const notifications=createNotifications({identity:peopleIdentity,followButton:person=>`<button type="button" class="button" data-follow-back data-follow="${escape(person.id)}" data-private="${Boolean(person.isPrivate)}" ${pendingAttributes('follow',person.id)} aria-pressed="${hasFollow(person.id)}">${hasFollow(person.id)?followLabel(person.id,person.isPrivate):'Seguir de volta'}</button>`});
+const notifications=createNotifications({
+ identity:peopleIdentity,toast,
+ onResponse:()=>{if(page==='perfil'&&!visitedId)renderProfile();},
+ onFollowChange:()=>{if(page==='perfil'&&visitedId)void loadVisitedProfile();else void refreshView();},
+ followButton:person=>`<button type="button" class="button" data-follow-back data-follow="${escape(person.id)}" data-private="${Boolean(person.isPrivate)}" ${pendingAttributes('follow',person.id)} aria-pressed="${hasFollow(person.id)}">${hasFollow(person.id)?followLabel(person.id,person.isPrivate):'Seguir de volta'}</button>`
+});
 function askDelete(title,message,action,label='Apagar') {
  confirmAction=action;$('#confirm-title').textContent=title;$('#confirm-message').textContent=message;$('#confirm-action').textContent=label;$('#confirm-dialog').showModal();
 }
@@ -1079,15 +1084,14 @@ document.addEventListener('click',async event=>{
  const followingList=event.target.closest('[data-following-list]'),followersList=event.target.closest('[data-followers-list]');
  if(followingList)showFollowing(followingList.dataset.followingList||undefined);
  if(followersList)showFollowers(followersList.dataset.followersList||undefined);
- const accept=event.target.closest('[data-accept-request]'),decline=event.target.closest('[data-decline-request]'),remove=event.target.closest('[data-remove-follower]');
- if(accept||decline||remove){
-  const control=accept||decline||remove,controls=[...(control.closest('.person-row')?.querySelectorAll('button')||[control])];controls.forEach(button=>button.disabled=true);control.setAttribute('aria-busy','true');
+ const remove=event.target.closest('[data-remove-follower]');
+ if(remove){
+  const control=remove;control.disabled=true;control.setAttribute('aria-busy','true');
   try {
-   if(remove)await mutate('/api/follower','DELETE',{user:remove.dataset.removeFollower});
-   else await mutate('/api/follow-request','POST',{requester:accept?.dataset.acceptRequest||decline.dataset.declineRequest,accept:Boolean(accept)});
+   await mutate('/api/follower','DELETE',{user:remove.dataset.removeFollower});
    renderStories();if(page==='perfil')renderProfile();
    void notifications.refresh();if(peopleMode==='followers')showFollowers();
-  }catch(error){toast(error.message);if(error.status===404)void notifications.refresh();}finally{controls.forEach(button=>button.disabled=false);control.removeAttribute('aria-busy');}
+  }catch(error){toast(error.message);}finally{control.disabled=false;control.removeAttribute('aria-busy');}
  }
 });
 

@@ -377,7 +377,8 @@ form .picker-search input.catalog-query { min-width: 0; margin: 0; padding: 12px
 .notifications-button {position:relative;flex-shrink:0;}
 .notification-count {position:absolute;top:0;right:-2px;min-width:17px;height:17px;display:grid;place-items:center;background:#df4545;color:#fff;font-size:10px;font-weight:600;line-height:1;padding:0 4px;border:2px solid var(--bg);border-radius:20px;}
 #notifications-dialog {width:min(560px,calc(100% - 32px));}
-.notification-row {position:relative;gap:14px;}
+.person-row.notification-row {position:relative;gap:14px;padding-right:30px;}
+.notification-dismiss {position:absolute;top:15px;right:-5px;width:28px;height:28px;font-size:20px;color:var(--muted);}
 .notification-row .person-identity {flex:1;}
 .notification-row .notification-message {margin-top:5px;color:var(--text);font-size:11px;}
 .notification-row time {display:block;font-size:10px;color:var(--muted);}
