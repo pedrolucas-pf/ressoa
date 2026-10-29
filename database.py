@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS users (
  favorites TEXT NOT NULL DEFAULT '[]', pinned TEXT NOT NULL DEFAULT '[]', background TEXT,
  entries_version INTEGER NOT NULL DEFAULT 0, profile_version INTEGER NOT NULL DEFAULT 0,
  draft TEXT NOT NULL DEFAULT '{}', seen TEXT NOT NULL DEFAULT '{}', imported_at TEXT, created_at TEXT NOT NULL,
- is_private INTEGER NOT NULL DEFAULT 0
+ is_private INTEGER NOT NULL DEFAULT 0, notifications_version INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS password_resets (
@@ -136,6 +136,12 @@ CREATE TABLE IF NOT EXISTS follow_requests (
  created_at TEXT NOT NULL, PRIMARY KEY(user_id,target_id)
 );
 CREATE INDEX IF NOT EXISTS follow_requests_target ON follow_requests(target_id,created_at);
+CREATE TABLE IF NOT EXISTS follow_notifications (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL, read_at TEXT, PRIMARY KEY(user_id,actor_id)
+);
+CREATE INDEX IF NOT EXISTS follow_notifications_recent ON follow_notifications(user_id,created_at DESC,actor_id DESC);
+CREATE INDEX IF NOT EXISTS follow_notifications_unread ON follow_notifications(user_id) WHERE read_at IS NULL;
 CREATE TABLE IF NOT EXISTS actions (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
  kind TEXT NOT NULL CHECK(kind IN ('like','repost','saved')), PRIMARY KEY(user_id, post_id, kind)
@@ -148,7 +154,7 @@ CREATE TABLE IF NOT EXISTS shares (
  method TEXT NOT NULL CHECK(method IN ('native','link')), updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,post_id)
 );
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 """
 
 
@@ -180,7 +186,7 @@ class Database:
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript(SCHEMA)
-            for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''")):
+            for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('users','notifications_version','INTEGER NOT NULL DEFAULT 0'),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''")):
                 if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
             self._migrate_username_case(db)
@@ -553,7 +559,8 @@ class Database:
             recent=f"{published_time}>CAST(? AS timestamptz)" if self.is_postgres else f"{published_time}>julianday(?)"
             cutoff=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()
             queries = [
-                ('SELECT * FROM users WHERE id=?', (user_id,)),
+                ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL) AS unread_followers
+                    FROM users WHERE id=?''', (user_id,)),
                 ("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)),
                 (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
@@ -596,6 +603,7 @@ class Database:
                         social=dict(following=[row['id'] for row in following],requested=requested, reposts=[row['post_id'] for row in actions if row['kind'] == 'repost'], likes={row['post_id']: ['me'] for row in actions if row['kind'] == 'like'}, seen=json.loads(user['seen'])),
                         followingPeople=[dict(id=row['id'], displayName=row['display_name'], handle=row['username'], photo=row['photo']) for row in following],
                         followersPeople=[self.person(row) for row in followers],followRequests=requests,
+                        notifications=dict(version=user['notifications_version'],unreadFollowers=user['unread_followers'],requestCount=len(requests),unreadCount=user['unread_followers']+len(requests)),
                         draft=json.loads(user['draft']), importedAt=user['imported_at'], serverWeek=current_week(), versions=dict(entries=user['entries_version'], profile=user['profile_version']))
 
     def save_entries(self, user_id, data):
@@ -696,9 +704,14 @@ class Database:
                     allowed_pins.append(identifier)
             try:
                 db.execute('UPDATE users SET display_name=?,username=?,bio=?,photo=?,favorites=?,pinned=?,background=?,is_private=?,profile_version=profile_version+1 WHERE id=?', (name, handle, text(value.get('bio', ''), 0, 180), photo, json.dumps(favorite_ids), json.dumps(allowed_pins), background,int(private),user_id))
-                if not private:
+                if current['is_private'] and not private:
+                    db.execute('''INSERT INTO follow_notifications(user_id,actor_id,created_at,read_at)
+                        SELECT r.target_id,r.user_id,?,NULL FROM follow_requests r WHERE r.target_id=?
+                        AND NOT EXISTS(SELECT 1 FROM follows f WHERE f.user_id=r.user_id AND f.target_id=r.target_id)
+                        ON CONFLICT(user_id,actor_id) DO UPDATE SET created_at=excluded.created_at,read_at=NULL''',(now_iso(),user_id))
                     db.execute('INSERT INTO follows (user_id,target_id) SELECT user_id,target_id FROM follow_requests WHERE target_id=? ON CONFLICT DO NOTHING',(user_id,))
-                    db.execute('DELETE FROM follow_requests WHERE target_id=?',(user_id,))
+                    if db.execute('DELETE FROM follow_requests WHERE target_id=? RETURNING user_id',(user_id,)).fetchall():
+                        self.bump_notifications(db,user_id)
             except sqlite3.IntegrityError:
                 raise APIError(409, 'Esse nome de usuário já está em uso.')
 
@@ -730,13 +743,18 @@ class Database:
                 if active:
                     already=db.execute('SELECT 1 FROM follows WHERE user_id=? AND target_id=?',(user_id,target)).fetchone()
                     if person['is_private'] and not already:
-                        db.execute('INSERT INTO follow_requests VALUES (?,?,?) ON CONFLICT DO NOTHING',(user_id,target,now_iso()))
+                        if db.execute('INSERT INTO follow_requests VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING user_id',(user_id,target,now_iso())).fetchone():
+                            self.bump_notifications(db,target)
                     else:
-                        db.execute('INSERT INTO follows VALUES (?,?) ON CONFLICT DO NOTHING', (user_id, target))
-                        db.execute('DELETE FROM follow_requests WHERE user_id=? AND target_id=?',(user_id,target))
+                        self.add_follow(db,user_id,target)
+                        if db.execute('DELETE FROM follow_requests WHERE user_id=? AND target_id=? RETURNING user_id',(user_id,target)).fetchone():
+                            self.bump_notifications(db,target)
                 else:
-                    db.execute('DELETE FROM follows WHERE user_id=? AND target_id=?', (user_id, target))
-                    db.execute('DELETE FROM follow_requests WHERE user_id=? AND target_id=?',(user_id,target))
+                    removed=db.fetch_many([
+                        ('DELETE FROM follows WHERE user_id=? AND target_id=? RETURNING user_id',(user_id,target)),
+                        ('DELETE FROM follow_requests WHERE user_id=? AND target_id=? RETURNING user_id',(user_id,target)),
+                        ('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? RETURNING actor_id',(target,user_id))])
+                    if any(removed):self.bump_notifications(db,target)
                 return
             if kind not in ('like', 'repost', 'saved'):
                 raise APIError(400, 'Interação inválida.')
@@ -762,14 +780,92 @@ class Database:
         with self.transaction() as db:
             request=db.execute('SELECT 1 FROM follow_requests WHERE user_id=? AND target_id=?',(requester,user_id)).fetchone()
             if not request:raise APIError(404,'Essa solicitação não está mais disponível.')
-            if data['accept']:db.execute('INSERT INTO follows VALUES (?,?) ON CONFLICT DO NOTHING',(requester,user_id))
+            if data['accept']:self.add_follow(db,requester,user_id,read=True)
             db.execute('DELETE FROM follow_requests WHERE user_id=? AND target_id=?',(requester,user_id))
+            self.bump_notifications(db,user_id)
 
     def remove_follower(self,user_id,data):
         follower=text(data.get('user'),1,100)
         with self.transaction() as db:
-            db.execute('DELETE FROM follows WHERE user_id=? AND target_id=?',(follower,user_id))
-            db.execute('DELETE FROM follow_requests WHERE user_id=? AND target_id=?',(follower,user_id))
+            removed=db.fetch_many([
+                ('DELETE FROM follows WHERE user_id=? AND target_id=? RETURNING user_id',(follower,user_id)),
+                ('DELETE FROM follow_requests WHERE user_id=? AND target_id=? RETURNING user_id',(follower,user_id)),
+                ('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? RETURNING actor_id',(user_id,follower))])
+            if any(removed):self.bump_notifications(db,user_id)
+
+    @staticmethod
+    def bump_notifications(db,user_id):
+        db.execute('UPDATE users SET notifications_version=notifications_version+1 WHERE id=?',(user_id,))
+
+    def add_follow(self,db,actor_id,user_id,read=False):
+        if not db.execute('INSERT INTO follows VALUES (?,?) ON CONFLICT DO NOTHING RETURNING user_id',(actor_id,user_id)).fetchone():
+            return
+        timestamp=now_iso()
+        db.fetch_many([
+            ('''INSERT INTO follow_notifications VALUES (?,?,?,?) ON CONFLICT(user_id,actor_id)
+                DO UPDATE SET created_at=excluded.created_at,read_at=excluded.read_at RETURNING actor_id''',(user_id,actor_id,timestamp,timestamp if read else None)),
+            ('UPDATE users SET notifications_version=notifications_version+1 WHERE id=? RETURNING id',(user_id,))])
+
+    @staticmethod
+    def notification_summary_query(user_id):
+        return ('''SELECT notifications_version AS version,
+            (SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL) AS unread_followers,
+            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(user_id,))
+
+    @staticmethod
+    def notification_summary(row):
+        return dict(version=row['version'],unreadFollowers=row['unread_followers'],requestCount=row['request_count'],unreadCount=row['unread_followers']+row['request_count'])
+
+    def notifications(self,user_id,cursor='',summary_only=False):
+        parameters=[user_id,user_id]
+        restriction=''
+        if cursor:
+            try:
+                if not isinstance(cursor,str) or len(cursor)>600 or not re.fullmatch(r'[A-Za-z0-9_-]+',cursor):raise ValueError()
+                values=json.loads(base64.urlsafe_b64decode(cursor+'='*(-len(cursor)%4)).decode())
+                if not isinstance(values,list) or len(values)!=3 or any(not isinstance(item,str) for item in values):raise ValueError()
+                stamp,kind,actor=values
+                if len(stamp)>50 or kind not in ('follow','request') or not 1<=len(actor)<=100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
+            except (ValueError,UnicodeError,TypeError):
+                raise APIError(400,'A lista mudou. Reabra as notificações.') from None
+            restriction='WHERE (i.created_at,i.kind,i.actor_id)<(?,?,?)'
+            parameters.extend(values)
+        with self.connect() as db:
+            db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
+            queries=[self.notification_summary_query(user_id)]
+            if not summary_only:
+                queries.append((f'''WITH items AS (
+                    SELECT 'request' AS kind,user_id AS actor_id,created_at,NULL AS read_at FROM follow_requests WHERE target_id=?
+                    UNION ALL SELECT 'follow',actor_id,created_at,read_at FROM follow_notifications WHERE user_id=?)
+                    SELECT i.kind,i.created_at,i.read_at,u.id,u.display_name,u.username,u.photo,u.is_private
+                    FROM items i JOIN users u ON u.id=i.actor_id {restriction}
+                    ORDER BY i.created_at DESC,i.kind DESC,i.actor_id DESC LIMIT 51''',tuple(parameters)))
+            results=db.fetch_many(queries)
+            summary=self.notification_summary(results[0][0])
+            if summary_only:return dict(summary=summary)
+            rows=results[1];items=[]
+            for row in rows[:50]:
+                items.append(dict(kind=row['kind'],person=dict(self.person(row),isPrivate=bool(row['is_private'])),createdAt=row['created_at'],unread=row['kind']=='follow' and row['read_at'] is None))
+            next_cursor=None
+            if len(rows)>50:
+                last=rows[49];payload=[last['created_at'],last['kind'],last['id']]
+                next_cursor=base64.urlsafe_b64encode(json.dumps(payload,separators=(',',':')).encode()).decode().rstrip('=')
+            return dict(summary=summary,items=items,nextCursor=next_cursor)
+
+    def read_notifications(self,user_id,data):
+        items=data.get('items')
+        if not isinstance(items,list) or len(items)>50:raise APIError(400,'Notificações inválidas.')
+        keys=[]
+        for item in items:
+            if not isinstance(item,dict):raise APIError(400,'Notificações inválidas.')
+            keys.extend((text(item.get('actorId'),1,100),text(item.get('createdAt'),1,50)))
+        if keys:
+            values=','.join('(?,?)' for _ in items)
+            with self.transaction() as db:
+                changed=db.execute(f'''UPDATE follow_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
+                    AND (actor_id,created_at) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*keys)).fetchall()
+                if changed:self.bump_notifications(db,user_id)
+        return self.notifications(user_id,summary_only=True)
 
     def likes(self, user_id, post_id):
         with self.connect() as db:

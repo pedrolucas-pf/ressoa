@@ -27,6 +27,7 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 - **Músicas e letras:** busca de faixas, capas, metadados, prévias e seleção de um trecho da letra para compor a publicação, conforme disponibilidade.
 - **Perfil:** foto, bio, até seis músicas favoritas, publicações fixadas, reposts e capa de fundo personalizável.
 - **Conexões:** busca de pessoas, seguidores, contas privadas e aprovação de solicitações para seguir.
+- **Notificações:** o ícone de pessoa com “+” reúne novos seguidores e solicitações, com contador vermelho. É possível confirmar ou excluir pedidos e seguir de volta pela lista. Seguidores vistos deixam de contar; solicitações continuam pendentes até uma resposta. A leitura é salva na conta e o contador é atualizado a cada 30 segundos enquanto o site está aberto.
 - **Interações:** curtidas sem contagem pública, reposts e Ressoas salvos. O autor pode consultar quem curtiu ou repostou.
 - **Compartilhamento:** prévia da imagem com a marca Ressoa no rodapé, download do Ressoa e cópia do link. Após entrar ou criar uma conta pelo link, a pessoa chega à publicação compartilhada.
 - **Contas:** cadastro, login por e-mail ou usuário e opção de manter a sessão no dispositivo.

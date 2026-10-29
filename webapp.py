@@ -236,6 +236,12 @@ class Application:
         if path == '/api/follow-requests' and method == 'GET':
             self.db.limit('requests-read:'+user_id,90,60)
             return 200, {'people':self.db.requests_for(user_id)}, []
+        if path == '/api/notifications' and method == 'GET':
+            self.db.limit('notifications-read:'+user_id,90,60)
+            return 200,self.db.notifications(user_id,value('cursor'),value('summary')=='1'),[]
+        if path == '/api/notifications/read' and method == 'POST':
+            self.db.limit('notifications-seen:'+user_id,120,60)
+            return 200,self.db.read_notifications(user_id,data),[]
         if method in ('PUT', 'POST', 'DELETE'):
             self.db.limit('write:' + user_id, 180, 60)
             if path == '/api/entries' and method == 'PUT':

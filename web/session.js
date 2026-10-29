@@ -53,8 +53,18 @@ export function setSnapshot(data, first = false) {
   const seen={...data.social.seen};
   for(const [id,stamp] of Object.entries(localSeen))seen[id]=Math.max(stamp,seen[id]||0);
   data={...data,social:{...data.social,seen:Object.fromEntries(Object.entries(seen).filter(([,stamp])=>Date.now()-stamp<7*86400000).sort((a,b)=>b[1]-a[1]).slice(0,300))}};
+  if (!first && confirmed?.user.id === data.user.id && (confirmed.notifications?.version || 0) > (data.notifications?.version || 0)) {
+    data = { ...data, notifications: confirmed.notifications };
+  }
   confirmed = data;
   publishSnapshot(true);
+}
+
+export function updateNotifications(summary, userId) {
+  if (!confirmed || confirmed.user.id !== userId || !summary || summary.version < (confirmed.notifications?.version || 0)) return;
+  if (JSON.stringify(confirmed.notifications) === JSON.stringify(summary)) return;
+  confirmed = { ...confirmed, notifications: summary };
+  publishSnapshot();
 }
 
 function publishSnapshot(full = false) {

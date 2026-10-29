@@ -11,6 +11,7 @@ import { albumArt, fitLyricArt } from './post-art.js';
 import { createLyricPicker } from './lyric-picker.js';
 import { ensureTrackDetails, durationLabel, trackSummary } from './track-context.js';
 import { createPeopleSearch, personHref } from './people-search.js';
+import { createNotifications } from './notifications.js';
 import { bindUsernameValidation, normalizeUsername, usernameError } from './username.js';
 import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, actionPending, hydratePublicProfile, hydratePost } from './session.js';
 
@@ -38,7 +39,6 @@ $('#edit-publish-dialog').addEventListener('close',()=>{const resolve=resolveEdi
 let editingId = null, readerId = null, shareFile = null, sharePost = null, confirmAction = null;
 let social = readAccount('ressoa.social', {}), feedGeneratedAt = Date.now();
 let publicPosts = readAccount('ressoa.public', []);
-let incomingRequests=getAccount().followRequests||[],requestPollGeneration=0,requestPollBusy=false;
 let visitedId=null,visitedProfile=null,profileError='',profileRequest=null,profileGeneration=0,loadingMore=false;
 let linkedPost=null,linkedId=null,linkRequest=null,linkGeneration=0;
 
@@ -128,7 +128,7 @@ document.addEventListener('error', event => {
 
 $('#search-icon').innerHTML = icons.search;
 $('#people-search-icon').innerHTML=icons.search;
-$('#follow-requests-button').firstElementChild.innerHTML=svg('<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-5m4-1v8m-4-4h8"/>');
+$('#notifications-button').firstElementChild.innerHTML=svg('<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-5m4-1v8m-4-4h8"/>');
 const peopleSearch=createPeopleSearch($('#people-search'));
 const viewport = $('#story-viewport');
 const mobileStoryFeed = matchMedia('(max-width: 640px)');
@@ -964,18 +964,8 @@ function followButton(post) {
 const hasFollow=id=>social.following.includes(id)||(social.requested||[]).includes(id);
 const followLabel=(id,privateProfile)=>social.following.includes(id)?'Seguindo':(social.requested||[]).includes(id)?'Solicitado':privateProfile?'Solicitar seguir':'Seguir';
 function updatePrivacyUI() {
- const count=incomingRequests.length;
- $('#follow-requests-button').hidden=false;
- $('#follow-requests-button').setAttribute('aria-label',count?`${count} solicitações para seguir`:'Solicitações para seguir');
- $('#request-count').hidden=!count;$('#request-count').textContent=count>99?'99+':String(count);
  $('#entry-form [value="public"]').textContent=profileInfo.isPrivate?'Seguidores':'Pública';
 }
-async function pollFollowRequests() {
- if(document.hidden||requestPollBusy||busy()||(!profileInfo.isPrivate&&!incomingRequests.length))return;
- requestPollBusy=true;const token=requestPollGeneration;
- try{const data=await api('/api/follow-requests');if(token!==requestPollGeneration)return;incomingRequests=data.people;updatePrivacyUI();if(peopleMode==='requests')renderFollowRequests();}catch{}finally{requestPollBusy=false;}
-}
-setInterval(pollFollowRequests,30000);
 function socialButtons(post) {
  if(post.visibility==='private')return '';
  const liked=(social.likes[post.id]||[]).includes('me'),reposted=social.reposts.includes(post.id);
@@ -986,7 +976,7 @@ function syncSocialButtons() {
  document.querySelectorAll('[data-like]').forEach(button=>{const on=(social.likes[button.dataset.like]||[]).includes('me');button.setAttribute('aria-pressed',String(on));button.setAttribute('aria-label',on?'Descurtir ressoa':'Curtir ressoa');markPending(button,'like',button.dataset.like);});
  document.querySelectorAll('[data-repost]').forEach(button=>{const on=social.reposts.includes(button.dataset.repost);button.setAttribute('aria-pressed',String(on));button.setAttribute('aria-label',on?'Remover repost':'Repostar ressoa');markPending(button,'repost',button.dataset.repost);});
  document.querySelectorAll('[data-save]').forEach(button=>{const on=saved.includes(button.dataset.save),post=allPosts().find(post=>post.id===button.dataset.save);button.setAttribute('aria-pressed',String(on));if(post)button.setAttribute('aria-label',`${on?'Remover das':'Adicionar às'} guardadas: ${tracks[post.track].title}`);markPending(button,'saved',button.dataset.save);});
- document.querySelectorAll('[data-follow]').forEach(button=>{const id=button.dataset.follow;button.setAttribute('aria-pressed',String(hasFollow(id)));button.textContent=button.closest('#people-dialog')&&peopleMode==='following'&&social.following.includes(id)?'Deixar de seguir':followLabel(id,button.dataset.private!=='false');markPending(button,'follow',id);});
+ document.querySelectorAll('[data-follow]').forEach(button=>{const id=button.dataset.follow;button.setAttribute('aria-pressed',String(hasFollow(id)));button.textContent=button.hasAttribute('data-follow-back')&&!hasFollow(id)?'Seguir de volta':button.closest('#people-dialog')&&peopleMode==='following'&&social.following.includes(id)?'Deixar de seguir':followLabel(id,button.dataset.private!=='false');markPending(button,'follow',id);});
 }
 function pendingAttributes(kind,target){return actionPending(kind,target)?'disabled aria-busy="true"':'';}
 let peopleRequest=null,peopleGeneration=0,peopleMode=null;
@@ -1023,17 +1013,7 @@ const showFollowers=target=>showRelations('followers',target);
 function peopleIdentity(person) {
  return `<a class="person-link person-identity" href="${escape(personHref(person.id))}" data-person="${escape(person.id)}">${profileAvatar(person.photo,person.displayName)}<span>${escape(person.displayName)}<small>@${escape(person.handle)}</small></span></a>`;
 }
-function renderFollowRequests() {
- $('#people-content').innerHTML=incomingRequests.length?incomingRequests.map(person=>`<div class="person-row request-row">${peopleIdentity(person)}<div class="request-actions"><button class="button" data-accept-request="${escape(person.id)}">Aceitar</button><button class="text-button" data-decline-request="${escape(person.id)}">Recusar</button></div></div>`).join(''):'<p class="empty">Nenhuma solicitação.</p>';
-}
-async function showFollowRequests() {
- cancelPeopleRequest();peopleMode='requests';const token=peopleGeneration;peopleRequest=new AbortController();
- $('#people-title').textContent='Solicitações para seguir';$('#people-content').textContent='Carregando…';if(!$('#people-dialog').open)$('#people-dialog').showModal();
- try {const data=await api('/api/follow-requests',{signal:peopleRequest.signal});if(token!==peopleGeneration)return;incomingRequests=data.people;updatePrivacyUI();renderFollowRequests();}
- catch(error){if(error.name!=='AbortError'&&token===peopleGeneration)$('#people-content').textContent=error.message;}
- finally{if(token===peopleGeneration)peopleRequest=null;}
-}
-$('#follow-requests-button').addEventListener('click',showFollowRequests);
+const notifications=createNotifications({identity:peopleIdentity,followButton:person=>`<button type="button" class="button" data-follow-back data-follow="${escape(person.id)}" data-private="${Boolean(person.isPrivate)}" ${pendingAttributes('follow',person.id)} aria-pressed="${hasFollow(person.id)}">${hasFollow(person.id)?followLabel(person.id,person.isPrivate):'Seguir de volta'}</button>`});
 function askDelete(title,message,action,label='Apagar') {
  confirmAction=action;$('#confirm-title').textContent=title;$('#confirm-message').textContent=message;$('#confirm-action').textContent=label;$('#confirm-dialog').showModal();
 }
@@ -1101,13 +1081,13 @@ document.addEventListener('click',async event=>{
  if(followersList)showFollowers(followersList.dataset.followersList||undefined);
  const accept=event.target.closest('[data-accept-request]'),decline=event.target.closest('[data-decline-request]'),remove=event.target.closest('[data-remove-follower]');
  if(accept||decline||remove){
-  const control=accept||decline||remove;control.disabled=true;
+  const control=accept||decline||remove,controls=[...(control.closest('.person-row')?.querySelectorAll('button')||[control])];controls.forEach(button=>button.disabled=true);control.setAttribute('aria-busy','true');
   try {
    if(remove)await mutate('/api/follower','DELETE',{user:remove.dataset.removeFollower});
    else await mutate('/api/follow-request','POST',{requester:accept?.dataset.acceptRequest||decline.dataset.declineRequest,accept:Boolean(accept)});
    renderStories();if(page==='perfil')renderProfile();
-   if(peopleMode==='requests')renderFollowRequests();if(peopleMode==='followers')showFollowers();
-  }catch(error){toast(error.message);}finally{control.disabled=false;}
+   void notifications.refresh();if(peopleMode==='followers')showFollowers();
+  }catch(error){toast(error.message);if(error.status===404)void notifications.refresh();}finally{controls.forEach(button=>button.disabled=false);control.removeAttribute('aria-busy');}
  }
 });
 
@@ -1122,7 +1102,7 @@ window.addEventListener('accountchange', () => {
  entries = validEntries(read('ressoa.entries', [])); saved=read('ressoa.saved',[]);
  profileInfo=cleanProfile(read('ressoa.profile',defaultProfile));social=read('ressoa.social',{});
  weekly=read('ressoa.weekly',null);publicPosts=read('ressoa.public',[]);
- incomingRequests=getAccount().followRequests||[];requestPollGeneration++;updatePrivacyUI();updateProfileShortcut();
+ updatePrivacyUI();updateProfileShortcut();
  if(page==='foryou'&&feedMode==='following'&&JSON.stringify(oldFollowing)!==JSON.stringify(social.following))renderStories(false,true);
  if(page==='perfil'&&!visitedId&&JSON.stringify(oldReposts)!==JSON.stringify(social.reposts))renderProfile();
  if(page==='diario'&&collection==='saved'&&JSON.stringify(oldSaved)!==JSON.stringify(saved))renderDiary();

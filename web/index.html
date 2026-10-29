@@ -62,7 +62,7 @@
       <div id="people-search-panel" class="people-search-panel" hidden><p id="people-search-status" role="status"></p><div id="people-results" role="listbox" aria-label="Pessoas encontradas"></div></div>
     </div>
     <div class="header-actions">
-      <button class="icon-button requests-button" id="follow-requests-button" aria-label="Solicitações para seguir"><span aria-hidden="true"></span><span id="request-count" class="request-count" hidden></span></button>
+      <button class="icon-button notifications-button" id="notifications-button" aria-label="Notificações" aria-haspopup="dialog" aria-controls="notifications-dialog"><span aria-hidden="true"></span><span id="notification-count" class="notification-count" aria-hidden="true" hidden></span></button>
       <a class="icon-button profile-shortcut" href="#perfil" data-page="perfil" aria-label="Meu perfil" title="Meu perfil"><span class="profile-avatar" aria-hidden="true"></span></a>
     </div>
     </div>
@@ -177,6 +177,13 @@
   </dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-message" class="form-note"></p><div class="dialog-actions"><button class="button" data-close="confirm-dialog">Cancelar</button><button class="button primary" id="confirm-action">Apagar</button></div></dialog>
   <dialog id="people-dialog" aria-labelledby="people-title"><div class="dialog-heading"><h2 id="people-title">Curtidas e reposts</h2><button class="icon-button" data-close="people-dialog" aria-label="Fechar pessoas">×</button></div><div id="people-content"></div></dialog>
+  <dialog id="notifications-dialog" aria-labelledby="notifications-title">
+    <div class="dialog-heading"><h2 id="notifications-title">Notificações</h2><button class="icon-button" data-close="notifications-dialog" aria-label="Fechar notificações">×</button></div>
+    <div id="notification-content"></div>
+    <p id="notification-status" class="form-note" role="status"></p>
+    <button type="button" class="text-button" id="notification-more" hidden>Ver mais</button>
+    <button type="button" class="text-button" id="notification-retry" hidden>Tentar novamente</button>
+  </dialog>
   <dialog id="share-dialog" aria-labelledby="share-title"><div class="dialog-heading"><h2 id="share-title">Compartilhar ressoa</h2><button class="icon-button" data-close="share-dialog" aria-label="Fechar compartilhamento">×</button></div><div id="share-preview"></div><p id="share-status" class="form-note" role="status"></p><div class="dialog-actions"><button type="button" class="button primary" id="download-share" disabled>Baixar ressoa</button><button type="button" class="button" id="copy-share-link">Copiar link</button></div></dialog>
   <div id="spotify-controller-host" aria-hidden="true"></div>
   <div id="toast" role="status" hidden></div>

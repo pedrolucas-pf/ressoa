@@ -174,6 +174,7 @@ def initialize(dsn, sqlite_schema):
         for statement in schema.split(';'):
             if statement.strip():db.execute(statement)
         db.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private INTEGER NOT NULL DEFAULT 0')
+        db.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_version INTEGER NOT NULL DEFAULT 0')
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS lyric_excerpt TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS feed_published_at TEXT NOT NULL DEFAULT ''")
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_email_ci ON users(lower(email))')
@@ -188,3 +189,4 @@ def initialize(dsn, sqlite_schema):
         db.execute('INSERT INTO ressoa_schema VALUES (3) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (4) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (5) ON CONFLICT DO NOTHING')
+        db.execute('INSERT INTO ressoa_schema VALUES (6) ON CONFLICT DO NOTHING')
