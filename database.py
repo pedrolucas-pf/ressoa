@@ -104,7 +104,7 @@ def clean_track(value):
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
- id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+ id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, username TEXT NOT NULL UNIQUE COLLATE BINARY,
  password_hash TEXT NOT NULL, display_name TEXT NOT NULL, bio TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '',
  favorites TEXT NOT NULL DEFAULT '[]', pinned TEXT NOT NULL DEFAULT '[]', background TEXT,
  entries_version INTEGER NOT NULL DEFAULT 0, profile_version INTEGER NOT NULL DEFAULT 0,
@@ -164,6 +164,7 @@ class Database:
         self.source=path
         self._request_state = ContextVar('ressoa_database_request', default=None)
         self.is_postgres=str(path).startswith(('postgres://','postgresql://'))
+        self.username_match = 'username COLLATE "C"=?' if self.is_postgres else 'username COLLATE BINARY=?'
         if self.is_postgres:
             from postgres_storage import initialize, create_pool
             self.path=None;self._dsn=str(path)
@@ -178,6 +179,41 @@ class Database:
             for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''")):
                 if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            self._migrate_username_case(db)
+
+    @staticmethod
+    def _migrate_username_case(db):
+        definition = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()[0]
+        pattern = r'(\busername\s+TEXT\s+NOT\s+NULL\s+UNIQUE\s+COLLATE\s+)NOCASE'
+        if not re.search(pattern, definition, re.IGNORECASE):
+            return
+        # Rebuild only the local users table, preserving IDs and every child row.
+        # Foreign keys are checked before the transaction commits.
+        db.execute('PRAGMA foreign_keys=OFF')
+        if db.execute('PRAGMA foreign_keys').fetchone()[0]:
+            raise RuntimeError('A atualização local dos nomes precisa iniciar fora de uma transação.')
+        try:
+            db.execute('BEGIN IMMEDIATE')
+            definition = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()[0]
+            updated = re.sub(pattern, r'\1BINARY', definition, flags=re.IGNORECASE)
+            if updated != definition:
+                updated = re.sub(r'^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"users"|users)', 'CREATE TABLE "__ressoa_users_exact"', updated, count=1, flags=re.IGNORECASE)
+                objects = db.execute("SELECT sql FROM sqlite_master WHERE tbl_name='users' AND type IN ('index','trigger') AND sql IS NOT NULL AND name NOT IN ('users_username_ci','users_username_unicode_ci')").fetchall()
+                columns = ','.join('"'+row['name'].replace('"','""')+'"' for row in db.execute('PRAGMA table_info(users)').fetchall())
+                db.execute(updated)
+                db.execute(f'INSERT INTO "__ressoa_users_exact" ({columns}) SELECT {columns} FROM users')
+                db.execute('DROP TABLE users')
+                db.execute('ALTER TABLE "__ressoa_users_exact" RENAME TO users')
+                for item in objects:
+                    db.execute(item['sql'])
+                if db.execute('PRAGMA foreign_key_check').fetchall():
+                    raise RuntimeError('Não foi possível atualizar os nomes de usuário mantendo os vínculos das contas.')
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.execute('PRAGMA foreign_keys=ON')
 
     @staticmethod
     def clean_excerpt(value):
@@ -283,7 +319,7 @@ class Database:
                 return self.check_registration(email, username, db)
         # Login accepts either field, so another account cannot reuse either identity.
         email_used = bool(db.execute('SELECT 1 FROM users WHERE username_key(email)=username_key(?) OR username_key(username)=username_key(?)', (email,email)).fetchone())
-        username_used = bool(db.execute('SELECT 1 FROM users WHERE username_key(username)=username_key(?) OR username_key(email)=username_key(?)', (username,username)).fetchone())
+        username_used = bool(db.execute(f'SELECT 1 FROM users WHERE {self.username_match} OR username_key(email)=username_key(?)', (username,username)).fetchone())
         if email_used and username_used:
             raise APIError(409, 'Esse e-mail e esse nome de usuário já estão em uso. Insira outro e-mail e outro usuário.')
         if email_used:
@@ -295,9 +331,9 @@ class Database:
         identifier, password = unicodedata.normalize('NFC',text(data.get('identifier'), 1, 254)).lstrip('@').strip(), data.get('password', '')
         if not isinstance(password, str) or len(password) > 128:
             raise APIError(401, 'E-mail, usuário ou senha incorretos.')
-        self.limit('login:' + identifier.lower())
         with self.connect() as db:
-            row = db.execute('SELECT id,password_hash FROM users WHERE username_key(email)=username_key(?) OR username_key(username)=username_key(?)', (identifier, identifier)).fetchone()
+            row = db.execute(f'SELECT id,password_hash FROM users WHERE {self.username_match} OR username_key(email)=username_key(?)', (identifier, identifier)).fetchone()
+        self.limit('login:' + (row['id'] if row else identifier))
         valid = check_password(password, row['password_hash'] if row else _DUMMY)
         if not row or not valid:
             raise APIError(401, 'E-mail, usuário ou senha incorretos.')
@@ -568,7 +604,7 @@ class Database:
             version=current['profile_version']
             if data.get('version') != version:
                 raise APIError(409, 'Seu perfil mudou em outro dispositivo. Atualizamos os dados; tente novamente.')
-            if handle != current['username'] and db.execute('SELECT 1 FROM users WHERE id<>? AND (username_key(username)=username_key(?) OR username_key(email)=username_key(?))', (user_id,handle,handle)).fetchone():
+            if handle != current['username'] and db.execute(f'SELECT 1 FROM users WHERE id<>? AND ({self.username_match} OR username_key(email)=username_key(?))', (user_id,handle,handle)).fetchone():
                 raise APIError(409, 'Esse nome de usuário já está em uso. Escolha outro para continuar.')
             private=value.get('isPrivate',bool(current['is_private']))
             if type(private) is not bool:raise APIError(400,'Privacidade do perfil inválida.')

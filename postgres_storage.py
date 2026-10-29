@@ -158,7 +158,7 @@ $ressoa$
 
 
 def initialize(dsn, sqlite_schema):
-    schema=sqlite_schema.replace(' COLLATE NOCASE','').replace('expires_at REAL','expires_at DOUBLE PRECISION').replace('reset_at REAL','reset_at DOUBLE PRECISION')
+    schema=sqlite_schema.replace(' COLLATE NOCASE','').replace(' COLLATE BINARY',' COLLATE "C"').replace('expires_at REAL','expires_at DOUBLE PRECISION').replace('reset_at REAL','reset_at DOUBLE PRECISION')
     schema=re.sub(r'PRAGMA\s+user_version\s*=\s*\d+\s*;','',schema)
     with PostgresConnection(dsn) as db:
         db.execute('BEGIN')
@@ -177,8 +177,9 @@ def initialize(dsn, sqlite_schema):
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS lyric_excerpt TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS feed_published_at TEXT NOT NULL DEFAULT ''")
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_email_ci ON users(lower(email))')
-        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_ci ON users(lower(username))')
-        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unicode_ci ON users(username_key(username))')
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_exact ON users(username COLLATE "C")')
+        db.execute('DROP INDEX IF EXISTS users_username_ci')
+        db.execute('DROP INDEX IF EXISTS users_username_unicode_ci')
         db.execute('CREATE INDEX IF NOT EXISTS users_email_unicode ON users(username_key(email))')
         db.execute(SEARCH_FUNCTION)
         db.execute('CREATE TABLE IF NOT EXISTS ressoa_schema (version INTEGER PRIMARY KEY)')

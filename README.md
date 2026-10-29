@@ -30,6 +30,8 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 - **Compartilhamento:** prévia da imagem, download do Ressoa e cópia do link. Após entrar ou criar uma conta pelo link, a pessoa chega à publicação compartilhada.
 - **Contas:** cadastro, login por e-mail ou usuário e opção de manter a sessão no dispositivo.
 
+Nomes de usuário diferenciam maiúsculas e minúsculas: `DAss` e `dass` podem pertencer a contas distintas. O login por usuário exige a escrita exata do cadastro; por e-mail, essa diferença não é exigida.
+
 ## Tecnologias
 
 | Parte | Implementação |
