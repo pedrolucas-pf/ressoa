@@ -33,11 +33,32 @@ function squareImage(ctx,image,x,y,size) {
   const side=Math.min(image.naturalWidth,image.naturalHeight);
   ctx.drawImage(image,(image.naturalWidth-side)/2,(image.naturalHeight-side)/2,side,side,x,y,size,size);
 }
+function drawBrand(ctx,disc,{right,baseline,size,font,spacing,foreground,background}) {
+  ctx.save();ctx.font=font;ctx.textBaseline='alphabetic';ctx.textAlign='left';ctx.fillStyle=foreground;
+  const prefix=[...'ress'],diameter=size*.52,leftGap=size*.035,rightGap=-size*.09;
+  const prefixWidth=prefix.reduce((width,letter)=>width+ctx.measureText(letter).width+spacing,0);
+  const width=prefixWidth+leftGap+diameter+rightGap+ctx.measureText('a').width;
+  let x=right-width;
+  for(const letter of prefix){ctx.fillText(letter,x,baseline);x+=ctx.measureText(letter).width+spacing;}
+  const discX=x+leftGap,discY=baseline+size*.015-diameter;
+  if(disc)ctx.drawImage(disc,discX,discY,diameter,diameter);
+  else{
+    const gradient=ctx.createLinearGradient(discX,discY,discX+diameter,discY+diameter);
+    gradient.addColorStop(0,'#f5f5f5');gradient.addColorStop(.3,'#8e8e8e');gradient.addColorStop(.55,'#fafafa');gradient.addColorStop(1,'#aaa');
+    ctx.fillStyle=gradient;ctx.beginPath();ctx.arc(discX+diameter/2,discY+diameter/2,diameter/2,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle=background;ctx.beginPath();ctx.arc(discX+diameter/2,discY+diameter/2,diameter*.065,0,Math.PI*2);ctx.fill();
+  }
+  ctx.fillStyle=foreground;ctx.fillText('a',discX+diameter+rightGap,baseline);ctx.restore();
+}
 export async function createShareImage({post,track,artwork,author,photo,initials,provider}) {
   await document.fonts.ready;
   const style=getComputedStyle(document.documentElement),color=name=>style.getPropertyValue(name).trim();
   const serif=style.getPropertyValue('--serif'),sans=style.getPropertyValue('--sans');
-  await Promise.all([document.fonts.load(`27px ${serif}`),document.fonts.load(`12px ${sans}`)]);
+  const brand=getComputedStyle(document.querySelector('.header .brand')||document.querySelector('.brand'));
+  const brandSize=26,brandFont=`${brand.fontStyle} ${brand.fontWeight} ${brandSize}px ${brand.fontFamily}`;
+  const brandSpacing=(parseFloat(brand.letterSpacing)||0)/parseFloat(brand.fontSize)*brandSize;
+  const brandDisc=loadImage('assets/symbol.svg').catch(()=>null);
+  await Promise.all([document.fonts.load(`27px ${serif}`),document.fonts.load(`12px ${sans}`),document.fonts.load(brandFont)]);
   const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
   // Fixed portrait with the album at the center and the comment below it.
   const width=490,height=612.5,inset=30,contentWidth=width-inset*2,scale=1080/width;
@@ -87,6 +108,7 @@ export async function createShareImage({post,track,artwork,author,photo,initials
   ctx.stroke(new Path2D('M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z'));
   ctx.translate(55,0);ctx.stroke(new Path2D('M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7'));ctx.restore();
   ctx.fillStyle=color('--muted');ctx.font=`11px ${sans}`;ctx.fillText('Ver ressoa completa ↗',width/2,height-30);
+  drawBrand(ctx,await brandDisc,{right:width-inset,baseline:height-20,size:brandSize,font:brandFont,spacing:brandSpacing,foreground:color('--text'),background:color('--bg')});
   return new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
 }
 export function downloadFile(blob,filename) {

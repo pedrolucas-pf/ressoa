@@ -306,6 +306,7 @@ function moveStory(index, markSeen = true, fromScroll = false) {
 $('#story-progress').addEventListener('click',event=>{const step=event.target.closest('[data-index]');if(step)moveStory(Number(step.dataset.index));});
 function selectFeed(mode) {
  if(!['foryou','following'].includes(mode)||mode===feedMode)return;
+ clearSwipeCorrection();clearPullIndicator();
  if(stories[storyIndex]){rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);}
  feedMode=mode;feedPoolVersions.clear();feedDisplayKey='';
  renderStories(true);
@@ -322,6 +323,7 @@ $('#feed-filters').addEventListener('keydown',event=>{
 $('#feed-find-people').addEventListener('click',()=>{if($('#people-search').dataset.open!=='true')$('#toggle-people-search').click();$('#people-query').focus();});
 function refreshFeedBatch(wrap=false) {
  if(feedRefreshJob)return feedRefreshJob;
+ clearSwipeCorrection();clearPullIndicator();
  if(stories[storyIndex]){rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);}
  const mode=feedMode,current=new Map(stories.map(post=>[post.id,post.publishedAt||post.createdAt]));
  const button=$('#refresh-feed');button.disabled=true;button.setAttribute('aria-busy','true');$('#story-viewport').setAttribute('aria-busy','true');
@@ -371,11 +373,25 @@ async function toggleSave(id) {
 // Desktop keeps the horizontal carousel; mobile uses native vertical scroll snapping.
 let pointerStart = null;
 let lastGesture = 0;
-let scrollFrame, swipeFrame, mobileTouch = null, lastWheelAt = 0, wheelStartedAtEnd = false;
+let scrollFrame, swipeCorrection=null,swipeCorrectionTimer,mobileTouch=null,lastWheelAt=0,wheelStartedAtEnd=false,wheelStartedAtStart=false;
 const atFeedEnd=()=>stories.length>0&&storyIndex===stories.length-1&&viewport.scrollTop>=storyScrollTop(stories.length-1)-3;
+const atFeedStart=()=>stories.length>0&&storyIndex===0&&viewport.scrollTop<=3;
+function clearPullIndicator() {
+  const button=$('#refresh-feed');button.removeAttribute('data-pulling');button.removeAttribute('data-pull-ready');button.style.removeProperty('--pull-turn');
+}
+function clearSwipeCorrection(){clearTimeout(swipeCorrectionTimer);swipeCorrection=null;}
+function finishSwipeCorrection(){
+  const swipe=swipeCorrection;swipeCorrection=null;
+  if(!swipe||!mobileStoryFeed.matches||page!=='foryou'||feedRefreshJob||stories[swipe.index]?.id!==swipe.id||document.querySelector('dialog[open]'))return;
+  // Let native momentum finish; only help when a weekly card traps the gesture.
+  if(storyIndex===swipe.from||(storyIndex===swipe.index&&Math.abs(viewport.scrollTop-storyScrollTop(swipe.index))>3)){
+    scrollToStory(swipe.index,!matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+}
 viewport.addEventListener('scroll',()=>{
   if(!mobileStoryFeed.matches||page!=='foryou'||document.querySelector('dialog[open]'))return;
   if(storySnapTarget){clearTimeout(storySnapTimer);storySnapTimer=setTimeout(finishStorySnap,160);}
+  if(swipeCorrection){clearTimeout(swipeCorrectionTimer);swipeCorrectionTimer=setTimeout(finishSwipeCorrection,110);}
   cancelAnimationFrame(scrollFrame);
   scrollFrame=requestAnimationFrame(()=>{
     if(!mobileStoryFeed.matches||!viewport.clientHeight||feedRefreshJob)return;
@@ -388,26 +404,31 @@ viewport.addEventListener('scroll',()=>{
   });
 },{passive:true});
 viewport.addEventListener('touchstart',event=>{
-  cancelAnimationFrame(swipeFrame);
-  cancelStorySnap();
-  mobileTouch=mobileStoryFeed.matches&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,index:storyIndex,atEnd:atFeedEnd()}:null;
+  clearSwipeCorrection();clearPullIndicator();cancelStorySnap();
+  mobileTouch=mobileStoryFeed.matches&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,index:storyIndex,atStart:atFeedStart(),atEnd:atFeedEnd()}:null;
+},{passive:true});
+viewport.addEventListener('touchmove',event=>{
+  if(!mobileTouch?.atStart||event.touches.length!==1||feedRefreshJob)return;
+  const dx=event.touches[0].clientX-mobileTouch.x,dy=event.touches[0].clientY-mobileTouch.y;
+  if(dy<=0||Math.abs(dy)<=Math.abs(dx)*1.5){clearPullIndicator();return;}
+  const button=$('#refresh-feed');button.dataset.pulling='true';button.dataset.pullReady=String(dy>=75);button.style.setProperty('--pull-turn',`${Math.min(1,dy/75)*300}deg`);
 },{passive:true});
 viewport.addEventListener('touchend',event=>{
-  const start=mobileTouch;mobileTouch=null;
+  const start=mobileTouch;mobileTouch=null;clearPullIndicator();
   if(!start||!mobileStoryFeed.matches||event.touches.length||!event.changedTouches.length)return;
   const dx=event.changedTouches[0].clientX-start.x,dy=event.changedTouches[0].clientY-start.y;
   if(Math.abs(dy)>15)lastGesture=Date.now();
   if(Math.abs(dy)<=55||Math.abs(dy)<=Math.abs(dx)*1.5||window.getSelection()?.toString())return;
+  if(start.atStart&&atFeedStart()&&dy>=75){void refreshFeedBatch();return;}
   const target=start.index+(dy<0?1:-1);
   if(target>=stories.length){if(start.atEnd&&atFeedEnd())void refreshFeedBatch(true);return;}
   const index=Math.max(0,target),id=stories[index]?.id;
-  swipeFrame=requestAnimationFrame(()=>{
-    if(!mobileStoryFeed.matches||page!=='foryou'||stories[index]?.id!==id||document.querySelector('dialog[open]'))return;
-    scrollToStory(index,!matchMedia('(prefers-reduced-motion: reduce)').matches);
-  });
+  if(index!==start.index&&(stories[start.index]?.featured||stories[index]?.featured)){
+    swipeCorrection={from:start.index,index,id};swipeCorrectionTimer=setTimeout(finishSwipeCorrection,110);
+  }
 },{passive:true});
-viewport.addEventListener('touchcancel',()=>{mobileTouch=null;},{passive:true});
-mobileStoryFeed.addEventListener('change',()=>{pointerStart=null;mobileTouch=null;positionStory();scheduleTextLayout();});
+viewport.addEventListener('touchcancel',()=>{mobileTouch=null;clearPullIndicator();},{passive:true});
+mobileStoryFeed.addEventListener('change',()=>{pointerStart=null;mobileTouch=null;clearSwipeCorrection();clearPullIndicator();positionStory();scheduleTextLayout();});
 window.addEventListener('resize',scheduleTextLayout);
 textObserver.observe($('.header'));
 viewport.addEventListener('pointerdown', event => {
@@ -438,10 +459,12 @@ viewport.addEventListener('click', event => {
 viewport.addEventListener('wheel', event => {
   if(mobileStoryFeed.matches){
     const now=Date.now();
-    if(now-lastWheelAt>250)wheelStartedAtEnd=atFeedEnd();
+    if(now-lastWheelAt>250){wheelStartedAtEnd=atFeedEnd();wheelStartedAtStart=atFeedStart();}
     lastWheelAt=now;
     if(wheelStartedAtEnd&&atFeedEnd()&&event.deltaY>40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
       event.preventDefault();wheelStartedAtEnd=false;lastGesture=now;void refreshFeedBatch(true);
+    }else if(wheelStartedAtStart&&atFeedStart()&&event.deltaY<-40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
+      event.preventDefault();wheelStartedAtStart=false;lastGesture=now;void refreshFeedBatch();
     }
     return;
   }

@@ -22,13 +22,13 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 
 - **For you:** até 10 Ressoas por seleção, com prévias de áudio sobre as capas. Os ainda não vistos aparecem primeiro, do mais recente ao mais antigo; em datas iguais, quem você segue tem prioridade. Os já vistos continuam disponíveis e circulam começando pelos vistos há mais tempo. A aba **Seguindo** mostra apenas publicações dos perfis seguidos, com a mesma ordenação. Ao avançar depois do último, outra seleção ocupa o lugar da anterior; sem outras publicações elegíveis, a sequência volta ao início. Publicações comuns aparecem no feed por 24 horas e continuam disponíveis no perfil.
 - **Meus sons:** diário em blocos, com criação, edição, exclusão e controle de visibilidade das publicações.
-- **Feed no celular:** rolagem vertical com encaixe de um Ressoa por vez em For you e Seguindo. Deslizar para cima avança; para baixo retorna. No último, outro gesto para cima renova a seleção. A navegação do computador continua horizontal.
+- **Feed no celular:** rolagem vertical com inércia nativa e encaixe em For you e Seguindo. Deslizar para cima avança; para baixo retorna. No primeiro, puxar para baixo atualiza; no último, outro gesto para cima renova a seleção. A navegação do computador continua horizontal.
 - **Ressoa da semana:** uma escolha por semana, independente do diário e em destaque no feed e no perfil.
 - **Músicas e letras:** busca de faixas, capas, metadados, prévias e seleção de um trecho da letra para compor a publicação, conforme disponibilidade.
 - **Perfil:** foto, bio, até seis músicas favoritas, publicações fixadas, reposts e capa de fundo personalizável.
 - **Conexões:** busca de pessoas, seguidores, contas privadas e aprovação de solicitações para seguir.
 - **Interações:** curtidas sem contagem pública, reposts e Ressoas salvos. O autor pode consultar quem curtiu ou repostou.
-- **Compartilhamento:** prévia da imagem, download do Ressoa e cópia do link. Após entrar ou criar uma conta pelo link, a pessoa chega à publicação compartilhada.
+- **Compartilhamento:** prévia da imagem com a marca Ressoa no rodapé, download do Ressoa e cópia do link. Após entrar ou criar uma conta pelo link, a pessoa chega à publicação compartilhada.
 - **Contas:** cadastro, login por e-mail ou usuário e opção de manter a sessão no dispositivo.
 
 Nomes de usuário diferenciam maiúsculas e minúsculas: `DAss` e `dass` podem pertencer a contas distintas. O login por usuário exige a escrita exata do cadastro; por e-mail, essa diferença não é exigida.
