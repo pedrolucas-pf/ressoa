@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, unquote
 from database import APIError, Database
@@ -18,6 +19,17 @@ from services import ServiceError, search_tracks, get_track, lyrics, login_artwo
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / 'web'
 MAX_BODY = 12_000_000
+
+
+class VerificationMeta(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.token = ''
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'meta' and (attrs.get('name') or '').lower() == 'google-site-verification':
+            self.token = (attrs.get('content') or '').strip()
 
 
 class Application:
@@ -85,7 +97,11 @@ class Application:
         structured = json.dumps(site,ensure_ascii=False).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
         metadata = f'<link rel="canonical" href="{escape(url,quote=True)}">\n<script type="application/ld+json">{structured}</script>\n'
         verification = os.getenv('GOOGLE_SITE_VERIFICATION','').strip()
-        if verification:
+        if '<' in verification:
+            parser = VerificationMeta()
+            parser.feed(verification)
+            verification = parser.token
+        if re.fullmatch(r'[A-Za-z0-9_-]{1,256}',verification):
             metadata += f'<meta name="google-site-verification" content="{escape(verification,quote=True)}">\n'
         return file.read_bytes().replace(b'</head>',metadata.encode('utf-8')+b'</head>',1)
 

@@ -96,7 +96,7 @@ A página inicial tem título e descrição do produto, URL canônica e dados `W
 Para solicitar a indexação:
 
 1. Abra o [Google Search Console](https://search.google.com/search-console/) com sua conta Google e adicione uma propriedade do tipo **Prefixo do URL**: `https://ressoa.onrender.com/`. Use esse tipo porque o domínio `onrender.com` pertence ao Render.
-2. Escolha o método **Tag HTML**. Copie apenas o valor `content` da tag `google-site-verification`.
+2. Escolha o método **Tag HTML**. Copie o valor `content` da tag `google-site-verification`. A configuração também aceita a tag HTML completa e extrai o código automaticamente.
 3. No Render, em **Environment**, defina `GOOGLE_SITE_VERIFICATION` com esse valor. Salve, aguarde a atualização e clique em **Verificar** no Search Console. Mantenha a variável depois da confirmação.
 4. Em **Sitemaps**, envie `sitemap.xml`.
 5. Em **Inspeção de URL**, inspecione `https://ressoa.onrender.com/` e clique em **Solicitar indexação**. Acompanhe os relatórios de indexação e desempenho pelo Search Console.
