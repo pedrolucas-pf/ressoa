@@ -602,6 +602,23 @@ body.profile-background::before {content:'';position:fixed;inset:0;z-index:-1;ba
  .track-facts{gap:14px;}.track-facts dd{font-size:12px;}
 }
 
+/* Mobile feed: one post per vertical snap, within the space below the navigation. */
+@media(max-width:640px){
+ #for-you .story-viewport{
+  height:var(--mobile-feed-height,calc(100dvh - 245px));
+  min-height:220px;overflow-x:hidden;overflow-y:auto;
+  scroll-snap-type:y mandatory;overscroll-behavior-y:contain;
+  scrollbar-width:none;scroll-behavior:auto;-webkit-overflow-scrolling:touch;
+ }
+ #for-you .story-viewport::-webkit-scrollbar{display:none;}
+ #for-you .story-track{display:block;transform:none!important;transition:none;}
+ #for-you .story,#for-you .story.featured{
+  height:var(--mobile-feed-height,calc(100dvh - 245px));min-height:220px;
+  scroll-snap-align:start;scroll-snap-stop:always;
+  padding-bottom:max(18px,env(safe-area-inset-bottom));
+ }
+}
+
 /* Find people and visit a public profile from any signed-in screen. */
 .people-search{position:relative;flex:0 1 210px;min-width:155px;margin:0;z-index:4;}
 #toggle-people-search{display:none;}

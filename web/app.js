@@ -130,8 +130,29 @@ $('#search-icon').innerHTML = icons.search;
 $('#people-search-icon').innerHTML=icons.search;
 $('#follow-requests-button').firstElementChild.innerHTML=svg('<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-5m4-1v8m-4-4h8"/>');
 const peopleSearch=createPeopleSearch($('#people-search'));
-$('#story-viewport').tabIndex = 0;
-$('#story-viewport').setAttribute('aria-label', 'Publicações. Use as setas para navegar.');
+const viewport = $('#story-viewport');
+const mobileStoryFeed = matchMedia('(max-width: 640px)');
+viewport.tabIndex = 0;
+function resizeStoryViewport() {
+  viewport.setAttribute('aria-label',mobileStoryFeed.matches?'Publicações. Deslize para cima ou para baixo para navegar.':'Publicações. Use as setas para navegar.');
+  if(!mobileStoryFeed.matches){viewport.style.removeProperty('--mobile-feed-height');return;}
+  if(!viewport.getClientRects().length)return;
+  const height=Math.max(220,Math.floor(innerHeight-viewport.getBoundingClientRect().top-scrollY));
+  if(viewport.style.getPropertyValue('--mobile-feed-height')!==`${height}px`){
+    viewport.style.setProperty('--mobile-feed-height',`${height}px`);
+    viewport.scrollTop=storyIndex*height;
+  }
+}
+function positionStory(fromScroll=false) {
+  if(mobileStoryFeed.matches){
+    $('#story-track').style.removeProperty('transform');
+    resizeStoryViewport();
+    if(!fromScroll)viewport.scrollTop=storyIndex*viewport.clientHeight;
+  }else{
+    viewport.scrollTop=0;
+    $('#story-track').style.transform=`translateX(-${storyIndex*100}%)`;
+  }
+}
 
 function authorMarkup(post) {
   const initials = isMine(post) ? profileInfo.displayName.slice(0, 2).toUpperCase() : post.initials || 'P';
@@ -190,6 +211,7 @@ let layoutFrame;
 function scheduleTextLayout() {
   cancelAnimationFrame(layoutFrame);
   layoutFrame=requestAnimationFrame(()=>{
+    resizeStoryViewport();
     fitLyricArt();
     document.querySelectorAll('.story').forEach(story=>{
       const post=stories.find(post=>post.id===story.dataset.id);if(!post)return;
@@ -231,7 +253,7 @@ const textObserver=new ResizeObserver(scheduleTextLayout);
 textObserver.observe($('#story-viewport'));textObserver.observe($('#profile-content'));
 textObserver.observe($('#diary-entries'));
 document.fonts.ready.then(scheduleTextLayout);
-function moveStory(index, markSeen = true) {
+function moveStory(index, markSeen = true, fromScroll = false) {
   if(markSeen&&feedRefreshJob)return;
   if(markSeen&&stories.length&&index>=stories.length){
     void refreshFeedBatch(true);return;
@@ -240,11 +262,12 @@ function moveStory(index, markSeen = true) {
     feedGeneratedAt = Date.now();void refreshView();
   }
   const next = Math.max(0,Math.min(index,stories.length-1));
+  if(fromScroll&&next===storyIndex)return;
   if(markSeen && next!==storyIndex && stories[storyIndex]) { rememberSeen(social,stories[storyIndex].id); saveSeen(social.seen).catch(() => {}); }
   stopPreview(); storyIndex=next;
   $('#for-you').classList.toggle('weekly-view',Boolean(stories[storyIndex]?.featured));
   const focusInside=$('#story-track').contains(document.activeElement);
-  $('#story-track').style.transform=`translateX(-${storyIndex*100}%)`;
+  positionStory(fromScroll);
   document.querySelectorAll('.story').forEach((story,i)=>{story.inert=i!==storyIndex;story.setAttribute('aria-hidden',String(i!==storyIndex));});
   document.querySelectorAll('.progress-step').forEach((step,i)=>{step.classList.toggle('passed',i<storyIndex);if(i===storyIndex)step.setAttribute('aria-current','true');else step.removeAttribute('aria-current');});
   $('#story-position').textContent=stories.length?`${tracks[stories[storyIndex].track].title} · ${authorHandle(stories[storyIndex])}`:'Sem publicações.';
@@ -315,17 +338,42 @@ async function toggleSave(id) {
   if (stored) toast(existed ? 'Removida das guardadas.' : 'Ressoa guardada.');
 }
 
-// Click/tap: the left quarter goes back; the remaining area advances.
-// Text selection, controls, and vertical scrolling keep their native behavior.
+// Desktop keeps the horizontal carousel; mobile uses native vertical scroll snapping.
 let pointerStart = null;
 let lastGesture = 0;
-const viewport = $('#story-viewport');
+let scrollFrame, mobileTouch = null, lastWheelAt = 0, wheelStartedAtEnd = false;
+const atFeedEnd=()=>stories.length>0&&storyIndex===stories.length-1&&viewport.scrollTop>=viewport.scrollHeight-viewport.clientHeight-3;
+viewport.addEventListener('scroll',()=>{
+  if(!mobileStoryFeed.matches||page!=='foryou'||document.querySelector('dialog[open]'))return;
+  cancelAnimationFrame(scrollFrame);
+  scrollFrame=requestAnimationFrame(()=>{
+    if(!mobileStoryFeed.matches||!viewport.clientHeight||feedRefreshJob)return;
+    const index=Math.max(0,Math.min(stories.length-1,Math.round(viewport.scrollTop/viewport.clientHeight)));
+    if(index!==storyIndex){lastGesture=Date.now();moveStory(index,true,true);}
+  });
+},{passive:true});
+viewport.addEventListener('touchstart',event=>{
+  mobileTouch=mobileStoryFeed.matches&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,atEnd:atFeedEnd()}:null;
+},{passive:true});
+viewport.addEventListener('touchend',event=>{
+  const start=mobileTouch;mobileTouch=null;
+  if(!start||!mobileStoryFeed.matches||event.touches.length||!event.changedTouches.length)return;
+  const dx=event.changedTouches[0].clientX-start.x,dy=event.changedTouches[0].clientY-start.y;
+  if(Math.abs(dy)>15)lastGesture=Date.now();
+  if(start.atEnd&&atFeedEnd()&&dy<-55&&Math.abs(dy)>Math.abs(dx)*1.5&&!window.getSelection()?.toString())void refreshFeedBatch(true);
+},{passive:true});
+viewport.addEventListener('touchcancel',()=>{mobileTouch=null;},{passive:true});
+mobileStoryFeed.addEventListener('change',()=>{pointerStart=null;mobileTouch=null;positionStory();scheduleTextLayout();});
+window.addEventListener('resize',scheduleTextLayout);
+textObserver.observe($('.header'));
 viewport.addEventListener('pointerdown', event => {
+  if(mobileStoryFeed.matches)return;
   const control = event.target.closest('button, a, input, select, textarea');
   if (event.button !== 0 || !event.isPrimary || (control && !control.matches('[data-music]'))) return;
   pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId };
 });
 viewport.addEventListener('pointerup', event => {
+  if(mobileStoryFeed.matches){pointerStart=null;return;}
   if (!pointerStart || pointerStart.id !== event.pointerId) return;
   const dx = event.clientX - pointerStart.x;
   const dy = event.clientY - pointerStart.y;
@@ -338,11 +386,21 @@ viewport.addEventListener('pointerup', event => {
 viewport.addEventListener('pointercancel', () => pointerStart = null);
 viewport.addEventListener('click', event => {
   const more=event.target.closest('.read-more');if(more){openPost(more.dataset.read);return;}
+  if(mobileStoryFeed.matches)return;
   if (Date.now() - lastGesture < 450 || window.getSelection()?.toString() || event.target.closest('button, a, input, select, textarea')) return;
   const bounds = viewport.getBoundingClientRect();
   moveStory(storyIndex + (event.clientX < bounds.left + bounds.width * .25 ? -1 : 1));
 });
 viewport.addEventListener('wheel', event => {
+  if(mobileStoryFeed.matches){
+    const now=Date.now();
+    if(now-lastWheelAt>250)wheelStartedAtEnd=atFeedEnd();
+    lastWheelAt=now;
+    if(wheelStartedAtEnd&&atFeedEnd()&&event.deltaY>40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
+      event.preventDefault();wheelStartedAtEnd=false;lastGesture=now;void refreshFeedBatch(true);
+    }
+    return;
+  }
   const horizontal = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
   if (Math.abs(horizontal) < 15 || (!event.shiftKey && Math.abs(event.deltaY) > Math.abs(horizontal))) return;
   event.preventDefault();
@@ -352,9 +410,10 @@ viewport.addEventListener('wheel', event => {
 }, { passive: false });
 document.addEventListener('keydown', event => {
   if (page !== 'foryou' || document.querySelector('dialog[open]') || event.target.closest('input, select, textarea, [contenteditable="true"]') || event.altKey || event.ctrlKey || event.metaKey) return;
-  if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+  const vertical=mobileStoryFeed.matches&&['ArrowDown','ArrowUp','PageDown','PageUp'].includes(event.key);
+  if (event.key === 'ArrowRight' || event.key === 'ArrowLeft' || vertical) {
     event.preventDefault();
-    moveStory(storyIndex + (event.key === 'ArrowRight' ? 1 : -1));
+    moveStory(storyIndex + (['ArrowRight','ArrowDown','PageDown'].includes(event.key) ? 1 : -1));
   }
 });
 

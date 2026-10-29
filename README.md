@@ -22,6 +22,7 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 
 - **For you:** até 10 Ressoas por seleção, com prévias de áudio sobre as capas. Os ainda não vistos aparecem primeiro, do mais recente ao mais antigo; em datas iguais, quem você segue tem prioridade. Os já vistos continuam disponíveis e circulam começando pelos vistos há mais tempo. A aba **Seguindo** mostra apenas publicações dos perfis seguidos, com a mesma ordenação. Ao avançar depois do último, outra seleção ocupa o lugar da anterior; sem outras publicações elegíveis, a sequência volta ao início. Publicações comuns aparecem no feed por 24 horas e continuam disponíveis no perfil.
 - **Meus sons:** diário em blocos, com criação, edição, exclusão e controle de visibilidade das publicações.
+- **Feed no celular:** rolagem vertical com encaixe de um Ressoa por vez em For you e Seguindo. Deslizar para cima avança; para baixo retorna. No último, outro gesto para cima renova a seleção. A navegação do computador continua horizontal.
 - **Ressoa da semana:** uma escolha por semana, independente do diário e em destaque no feed e no perfil.
 - **Músicas e letras:** busca de faixas, capas, metadados, prévias e seleção de um trecho da letra para compor a publicação, conforme disponibilidade.
 - **Perfil:** foto, bio, até seis músicas favoritas, publicações fixadas, reposts e capa de fundo personalizável.
