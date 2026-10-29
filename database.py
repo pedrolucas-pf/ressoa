@@ -539,7 +539,8 @@ class Database:
             AND (p.kind='weekly' OR {stamp}>?)
             AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL))
             ORDER BY CASE WHEN CAST(v.seen_at AS DOUBLE PRECISION)>={stamp} THEN 1 ELSE 0 END,
-                {followed} DESC,{stamp} DESC,p.id LIMIT 120'''
+                CASE WHEN CAST(v.seen_at AS DOUBLE PRECISION)>={stamp} THEN CAST(v.seen_at AS DOUBLE PRECISION) ELSE 0 END,
+                {stamp} DESC,{followed} DESC,p.id LIMIT 120'''
         parameters.extend((user_id,*access_params,*([user_id] if mode=='following' else []),cutoff,current_week(),user_id))
         return statement, tuple(parameters)
 
@@ -557,7 +558,7 @@ class Database:
                 (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
                 AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL))
-                ORDER BY EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id) DESC,{published_time} DESC LIMIT 120""", (user_id,*access_params,cutoff,current_week(), user_id)),
+                ORDER BY {published_time} DESC,EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id) DESC,p.id LIMIT 120""", (user_id,*access_params,cutoff,current_week(), user_id)),
                 (f"""SELECT DISTINCT p.* FROM posts p JOIN actions a ON p.id=a.post_id JOIN users u ON u.id=p.owner_id WHERE a.user_id=? AND (p.visibility='public' OR p.owner_id=?) AND {access}
                 AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL)) LIMIT 500""", (user_id,user_id,*access_params,current_week())),
                 ('SELECT * FROM weekly WHERE user_id=? AND week_key=?', (user_id,current_week())),
@@ -569,12 +570,15 @@ class Database:
                 ('SELECT u.id,u.display_name,u.username,u.photo,r.created_at FROM follow_requests r JOIN users u ON u.id=r.user_id WHERE r.target_id=? ORDER BY r.created_at,u.id', (user_id,)),
                 ('SELECT target_id FROM follow_requests WHERE user_id=?', (user_id,)),
             ]
+            # Keep a separate pool for Following even when discovery has 120 newer posts.
+            queries.append(self.feed_query(user_id,'following',{}))
             if feed_options is not None:
                 queries.append(self.feed_query(user_id,feed_options.get('mode'),feed_options.get('seen',{})))
             results = db.fetch_many(queries)
             users,own,public,extra,selections,actions,following,followers,request_rows,requested_rows = results[:10]
+            public = [*public,*results[10]]
             if feed_options is not None:
-                public = [*public,*results[10]]
+                public = [*public,*results[11]]
             user = users[0]
             shared = {row['id']: row for row in [*public, *extra] if row['owner_id'] != user_id}
             selection = selections[0] if selections else None

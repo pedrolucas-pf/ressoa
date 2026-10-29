@@ -3,7 +3,7 @@ import { createTrackPicker } from './track-picker.js';
 import { weekKey, nextWeekLabel, lockedForWeek } from './weekly.js';
 import { createPlayback } from './playback.js';
 import { authorKey, rememberSeen } from './social.js';
-import { rankFeed, isInFeed, wasSeen, FEED_LIMIT, FEED_REFRESH_MS } from './feed.js';
+import { rankFeed, isInFeed, FEED_LIMIT, FEED_REFRESH_MS } from './feed.js';
 import { createShareImage, downloadFile } from './share.js';
 import { newId } from './id.js';
 import { fitText } from './text-layout.js';
@@ -36,7 +36,7 @@ $('#edit-publish-only').addEventListener('click',()=>finishEditPublication(false
 $('#edit-publish-again').addEventListener('click',()=>finishEditPublication(true));
 $('#edit-publish-dialog').addEventListener('close',()=>{const resolve=resolveEditPublication;resolveEditPublication=null;resolve?.(null);});
 let editingId = null, readerId = null, shareFile = null, sharePost = null, confirmAction = null;
-let social = readAccount('ressoa.social', {}), feedEpoch = Math.floor(Date.now() / FEED_REFRESH_MS), feedGeneratedAt = Date.now();
+let social = readAccount('ressoa.social', {}), feedGeneratedAt = Date.now();
 let publicPosts = readAccount('ressoa.public', []);
 let incomingRequests=getAccount().followRequests||[],requestPollGeneration=0,requestPollBusy=false;
 let visitedId=null,visitedProfile=null,profileError='',profileRequest=null,profileGeneration=0,loadingMore=false;
@@ -103,7 +103,11 @@ const previewText = post => post.text || '...';
 const authorHandle = post => {const handle=isMine(post)?profileInfo.handle:post.handle;return handle?'@'+handle:authorName(post);};
 function weeklyLocked() { weekly = read('ressoa.weekly', weekly); return Boolean(weekly && weekly.weekKey === getAccount().serverWeek); }
 const myWeeklyPost = () => weeklyLocked() && !weekly.deletedAt && weekly.item && tracks[weekly.item.track] ? { ...weekly.item, ownerId: 'me', kind: 'weekly' } : null;
-const weeklyPost = (include=()=>true) => [myWeeklyPost(),...publicPosts.filter(post=>post.kind==='weekly')].find(post=>post&&isInFeed(post)&&include(post))||null;
+function feedCandidates(mode=feedMode) {
+  const following=new Set(social.following);
+  return feedPosts().filter(post=>isInFeed(post)&&(mode==='foryou'||(!isMine(post)&&following.has(authorKey(post)))))
+    .map(post=>({...post,ownerId:isMine(post)?'me':authorKey(post),featured:post.kind==='weekly'}));
+}
 const { stopPreview, mountPreview, mountCoverPlayer, toggleCoverPlayer } = createPlayback({ tracks, musicDetails, toast });
 function spotifyBrand(track) {
   if (musicDetails[track].provider !== 'spotify') return `<a class="catalog-attribution" href="${escape(musicDetails[track].url)}" target="_blank" rel="noopener noreferrer">Ouvir no Deezer ↗</a>`;
@@ -150,22 +154,18 @@ function storyMarkup(post) {
 function renderStories(reset = false,preserveOrder = false) {
   const previousId=stories[storyIndex]?.id,previousIndex=storyIndex;
   const following = new Set(social.following);
-  const include = post => feedMode === 'foryou' || (!isMine(post) && following.has(authorKey(post)));
-  const unread=feedPosts().some(post=>include(post)&&isInFeed(post)&&!wasSeen(post,social.seen));
-  const featured = weeklyPost(post=>include(post)&&(!unread||!wasSeen(post,social.seen)));
-  const pool = feedPosts().filter(post => isInFeed(post) && include(post) && post.id !== featured?.id).map(post => ({ ...post, ownerId: isMine(post) ? 'me' : authorKey(post),featured:post.kind==='weekly' }));
-  const candidates=new Map([...pool,...(featured?[{...featured,featured:true}]:[])].map(post=>[post.id,post]));
+  const pool = feedCandidates();
+  const candidates=new Map(pool.map(post=>[post.id,post]));
   const versions=new Map([...candidates].map(([id,post])=>[id,post.publishedAt||post.createdAt||'']));
   const hasNew=[...versions].some(([id,version])=>feedPoolVersions.get(id)!==version);feedPoolVersions=versions;
-  const ranking={following:social.following,seen:social.seen,epoch:feedEpoch};
+  const ranking={following:social.following,seen:social.seen};
   let next;
   if(preserveOrder&&!hasNew){
     next=stories.filter(post=>candidates.has(post.id)).map(post=>candidates.get(post.id));
     const retained=new Set(next.map(post=>post.id));
     next.push(...rankFeed([...candidates.values()].filter(post=>!retained.has(post.id)),{...ranking,limit:FEED_LIMIT-next.length}));
   }else{
-    next=rankFeed(pool,{...ranking,limit:FEED_LIMIT-(featured?1:0)});
-    if(featured)next.splice(Math.min(2,next.length),0,{...featured,featured:true});
+    next=rankFeed(pool,ranking);
   }
   const displayKey=JSON.stringify([feedMode,next.map(post=>[post,tracks[post.track],cover(post.track)]),social.likes,social.reposts,social.following,social.requested,saved,profileInfo.displayName,profileInfo.photo]);
   if(preserveOrder&&!hasNew&&displayKey===feedDisplayKey){stories=next;return false;}
@@ -234,7 +234,6 @@ document.fonts.ready.then(scheduleTextLayout);
 function moveStory(index, markSeen = true) {
   if(markSeen&&feedRefreshJob)return;
   if(markSeen&&stories.length&&index>=stories.length){
-    rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);
     void refreshFeedBatch(true);return;
   }
   if (markSeen && Date.now() - feedGeneratedAt >= FEED_REFRESH_MS) {
@@ -254,6 +253,7 @@ function moveStory(index, markSeen = true) {
 $('#story-progress').addEventListener('click',event=>{const step=event.target.closest('[data-index]');if(step)moveStory(Number(step.dataset.index));});
 function selectFeed(mode) {
  if(!['foryou','following'].includes(mode)||mode===feedMode)return;
+ if(stories[storyIndex]){rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);}
  feedMode=mode;feedPoolVersions.clear();feedDisplayKey='';
  renderStories(true);
 }
@@ -269,6 +269,7 @@ $('#feed-filters').addEventListener('keydown',event=>{
 $('#feed-find-people').addEventListener('click',()=>{if($('#people-search').dataset.open!=='true')$('#toggle-people-search').click();$('#people-query').focus();});
 function refreshFeedBatch(wrap=false) {
  if(feedRefreshJob)return feedRefreshJob;
+ if(stories[storyIndex]){rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);}
  const mode=feedMode,current=new Map(stories.map(post=>[post.id,post.publishedAt||post.createdAt]));
  const button=$('#refresh-feed');button.disabled=true;button.setAttribute('aria-busy','true');$('#story-viewport').setAttribute('aria-busy','true');
  feedRefreshJob=(async()=>{
@@ -277,9 +278,9 @@ function refreshFeedBatch(wrap=false) {
    if(!refreshed){if(wrap&&mode===feedMode)moveStory(0,false);return;}
    feedGeneratedAt=Date.now();
    if(mode!==feedMode){renderStories(false,true);return;}
-   const fresh=feedPosts().some(post=>isInFeed(post)&&(mode==='foryou'||(!isMine(post)&&social.following.includes(authorKey(post))))
-    &&!wasSeen(post,social.seen)&&current.get(post.id)!==(post.publishedAt||post.createdAt));
-   if(fresh){feedEpoch++;renderStories(true);}
+   const next=rankFeed(feedCandidates(mode),{following:social.following,seen:social.seen});
+   const changed=next.some(post=>current.get(post.id)!==(post.publishedAt||post.createdAt));
+   if(changed)renderStories(true);
    else{renderStories(false,true);if(wrap)moveStory(0,false);if(!wrap)toast('Nenhum Ressoa novo.');}
   }catch(error){if(wrap&&mode===feedMode)moveStory(0,false);toast(error.message);}
   finally{button.disabled=false;button.removeAttribute('aria-busy');$('#story-viewport').removeAttribute('aria-busy');feedRefreshJob=null;}
