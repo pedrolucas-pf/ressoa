@@ -1,1 +1,24 @@
-﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#101010"/><text x="20" y="47" font-family="Georgia,serif" font-size="55" fill="#ededed">r</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="silver" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f5f5f5"/>
+      <stop offset=".25" stop-color="#8e8e8e"/>
+      <stop offset=".46" stop-color="#fafafa"/>
+      <stop offset=".6" stop-color="#777"/>
+      <stop offset=".82" stop-color="#dedede"/>
+      <stop offset="1" stop-color="#f5f5f5"/>
+    </linearGradient>
+    <mask id="hole">
+      <rect width="64" height="64" fill="white"/>
+      <circle cx="32" cy="32" r="4" fill="black"/>
+    </mask>
+  </defs>
+  <g mask="url(#hole)">
+    <circle cx="32" cy="32" r="30" fill="url(#silver)"/>
+    <path d="M32 32 6.02 17A30 30 0 0 1 24.24 3.02Z" fill="#fff" opacity=".4"/>
+    <path d="M32 32 57.98 47A30 30 0 0 1 39.76 60.98Z" fill="#fff" opacity=".4"/>
+    <circle cx="32" cy="32" r="28" fill="none" stroke="#fff" stroke-opacity=".4"/>
+    <circle cx="32" cy="32" r="14" fill="none" stroke="#101010" stroke-opacity=".4"/>
+    <circle cx="32" cy="32" r="5" fill="none" stroke="#777" stroke-width=".75"/>
+  </g>
+</svg>
