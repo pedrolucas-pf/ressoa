@@ -79,6 +79,7 @@ A versão online roda no **Render**, com os dados no **Neon**. O Dockerfile defi
 | `BREVO_API_KEY` | Chave privada da API da Brevo, para recuperar senhas |
 | `EMAIL_FROM` | Endereço remetente verificado na Brevo |
 | `EMAIL_FROM_NAME` | Nome do remetente; padrão: `Ressoa` |
+| `GOOGLE_SITE_VERIFICATION` | Valor `content` da tag HTML do Google Search Console, quando configurado |
 
 No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`. O servidor escuta em `0.0.0.0:$PORT`.
 
@@ -87,6 +88,20 @@ No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`
 Contas e publicações permanecem no Neon ao atualizar a aplicação. Uma instalação nova cria apenas as tabelas, sem usuários ou Ressoas de exemplo. O banco local e as credenciais ficam fora do Git. A retenção dos backups de produção é configurada no próprio Neon.
 
 Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos. Um monitor externo pode reduzir essa espera, sujeito aos limites do plano. O monitor precisa estar configurado e ativo fora da aplicação; este repositório não instala agendamentos por conta própria.
+
+### Presença no Google
+
+A página inicial tem título e descrição do produto, URL canônica e dados `WebSite` com o nome Ressoa. `/robots.txt` orienta o rastreamento e aponta para `/sitemap.xml`, que inclui apenas a página inicial pública. Perfis e publicações continuam protegidos pela autenticação. Os endereços acompanham `APP_ORIGIN` ou o domínio padrão informado pelo Render.
+
+Para solicitar a indexação:
+
+1. Abra o [Google Search Console](https://search.google.com/search-console/) com sua conta Google e adicione uma propriedade do tipo **Prefixo do URL**: `https://ressoa.onrender.com/`. Use esse tipo porque o domínio `onrender.com` pertence ao Render.
+2. Escolha o método **Tag HTML**. Copie apenas o valor `content` da tag `google-site-verification`.
+3. No Render, em **Environment**, defina `GOOGLE_SITE_VERIFICATION` com esse valor. Salve, aguarde a atualização e clique em **Verificar** no Search Console. Mantenha a variável depois da confirmação.
+4. Em **Sitemaps**, envie `sitemap.xml`.
+5. Em **Inspeção de URL**, inspecione `https://ressoa.onrender.com/` e clique em **Solicitar indexação**. Acompanhe os relatórios de indexação e desempenho pelo Search Console.
+
+Essas configurações ajudam o Google a descobrir e identificar o site; a indexação e a posição nos resultados dependem do Google e não são imediatas nem garantidas. Um domínio próprio pode facilitar a divulgação da marca, mas não é requisito para indexar o endereço atual. Consulte as orientações oficiais sobre [verificação](https://support.google.com/webmasters/answer/9008080?hl=pt-BR) e [solicitação de rastreamento](https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl).
 
 ### Recuperação de senha
 

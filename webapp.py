@@ -8,6 +8,7 @@ from time import perf_counter
 from contextlib import nullcontext
 from http import HTTPStatus
 from http.cookies import SimpleCookie
+from html import escape
 from pathlib import Path
 from urllib.parse import parse_qs, unquote
 from database import APIError, Database
@@ -39,6 +40,8 @@ class Application:
         started = perf_counter()
         headers = [('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'strict-origin-when-cross-origin'),
                    ('X-Frame-Options', 'DENY'), ('Cache-Control', 'no-store')]
+        if env.get('PATH_INFO','').startswith('/api/') or env.get('PATH_INFO') in ('/healthz','/readyz'):
+            headers.append(('X-Robots-Tag','noindex'))
         if self.production:
             headers.append(('Strict-Transport-Security', 'max-age=31536000'))
         try:
@@ -72,6 +75,19 @@ class Application:
         elif remember:
             value += '; Max-Age=2592000'
         return [('Set-Cookie', value)]
+
+    def public_origin(self, env):
+        return self.origin or f"{env.get('wsgi.url_scheme','http')}://{env.get('HTTP_HOST','localhost')}"
+
+    def homepage(self, env, file):
+        url = self.public_origin(env)+'/'
+        site = {'@context':'https://schema.org','@type':'WebSite','name':'Ressoa','url':url,'inLanguage':'pt-BR'}
+        structured = json.dumps(site,ensure_ascii=False).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
+        metadata = f'<link rel="canonical" href="{escape(url,quote=True)}">\n<script type="application/ld+json">{structured}</script>\n'
+        verification = os.getenv('GOOGLE_SITE_VERIFICATION','').strip()
+        if verification:
+            metadata += f'<meta name="google-site-verification" content="{escape(verification,quote=True)}">\n'
+        return file.read_bytes().replace(b'</head>',metadata.encode('utf-8')+b'</head>',1)
 
     @staticmethod
     def token(env):
@@ -110,6 +126,13 @@ class Application:
         if not path.startswith('/api/'):
             if method not in ('GET', 'HEAD'):
                 raise APIError(405, 'Método não permitido.')
+            if path == '/robots.txt':
+                body = 'User-agent: *\nAllow: /\nAllow: /api/session$\nDisallow: /api/\nDisallow: /healthz\nDisallow: /readyz\n\nSitemap: '+self.public_origin(env)+'/sitemap.xml\n'
+                return 200, body.encode('utf-8'), [('Content-Type','text/plain; charset=utf-8')]
+            if path == '/sitemap.xml':
+                url = escape(self.public_origin(env)+'/',quote=True)
+                body = f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{url}</loc></url></urlset>\n'
+                return 200, body.encode('utf-8'), [('Content-Type','application/xml; charset=utf-8')]
             path = unquote(path)
             public = {'/', '/index.html', '/styles.css'} | {f'/{file.name}' for file in WEB_ROOT.glob('*.js')}
             if '..' in path.split('/') or '\\' in path or not (path in public or path.startswith('/assets/')):
@@ -118,7 +141,8 @@ class Application:
             if not file.is_relative_to(WEB_ROOT) or not file.is_file():
                 raise APIError(404, 'Página não encontrada.')
             mime = 'text/javascript' if file.suffix == '.js' else mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
-            return 200, file.read_bytes(), [('Content-Type', mime)]
+            body = self.homepage(env,file) if path in ('/','/index.html') else file.read_bytes()
+            return 200, body, [('Content-Type', mime)]
         token = self.token(env)
         user_id = self.db.session_user(token) if token else None
         data = self.body(env) if method in ('POST', 'PUT', 'DELETE') else {}
