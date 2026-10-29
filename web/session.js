@@ -6,6 +6,7 @@ const values = new Map();
 let queue = Promise.resolve();
 let pending = 0;
 let mutationRevision = 0, accountRevision = 0;
+let localSeen = {};
 const actions = new Map();
 const actionJobs = new Set();
 export const getAccount = () => snapshot;
@@ -48,7 +49,10 @@ export function hydratePublicProfile(data) {
 }
 
 export function setSnapshot(data, first = false) {
-  if (first) { resetCatalog(); cancelSeen(); actions.clear(); accountRevision++; }
+  if (first) { resetCatalog(); cancelSeen(); actions.clear(); accountRevision++; localSeen={}; }
+  const seen={...data.social.seen};
+  for(const [id,stamp] of Object.entries(localSeen))seen[id]=Math.max(stamp,seen[id]||0);
+  data={...data,social:{...data.social,seen:Object.fromEntries(Object.entries(seen).filter(([,stamp])=>Date.now()-stamp<7*86400000).sort((a,b)=>b[1]-a[1]).slice(0,300))}};
   confirmed = data;
   publishSnapshot(true);
 }
@@ -148,11 +152,11 @@ export async function writeAccount(key, value, options={}) {
   throw new Error('Operação de armazenamento desconhecida.');
 }
 
-export async function refreshAccount() {
+export async function refreshAccount(feedOptions) {
   await Promise.all([queue, ...actionJobs]);
   if (pending) return false;
   const revision = mutationRevision, generation = accountRevision;
-  const data = await api('/api/bootstrap');
+  const data = await (feedOptions?api('/api/feed',{method:'POST',body:feedOptions}):api('/api/bootstrap'));
   if (!pending && revision === mutationRevision && generation === accountRevision) { setSnapshot(data); return true; }
   return false;
 }
@@ -178,6 +182,8 @@ export function socialAction(kind, target, active, options = {}) {
 let seenTimer, seenPending = null, seenWriting = false;
 function cancelSeen() { clearTimeout(seenTimer); seenPending = null; }
 export function saveSeen(value) {
+  localSeen = { ...value };
+  if(confirmed)confirmed={...confirmed,social:{...confirmed.social,seen:localSeen}};
   seenPending = { ...value };
   clearTimeout(seenTimer);
   seenTimer = setTimeout(flushSeen, 1000);

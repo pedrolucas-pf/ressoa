@@ -4,6 +4,10 @@ import { bindUsernameValidation } from './username.js';
 
 const $ = selector => document.querySelector(selector);
 let mode = 'login', loaded = false;
+const resetMatch=location.hash.match(/^#redefinir-senha\/([A-Za-z0-9_-]{43})$/);
+let resetToken=resetMatch?.[1]||'';
+if(location.hash.startsWith('#redefinir-senha'))history.replaceState(null,'',location.pathname+location.search);
+const labels={login:'Entrar',register:'Criar conta',forgot:'Enviar link',reset:'Salvar nova senha'};
 const form = $('#auth-form');
 bindUsernameValidation(form.elements.username);
 function renderCovers(pool) {
@@ -34,14 +38,26 @@ function setMode(next, animate=true) {
   modeAnimation?.cancel();
   mode = next;
   $('#auth-error').textContent = '';
+  $('#auth-notice').textContent = '';
+  const recovering=mode==='forgot'||mode==='reset';
+  $('.auth-tabs').hidden=recovering;
+  $('#recovery-title').hidden=!recovering;
+  $('#recovery-title').textContent=mode==='reset'?'Escolha uma nova senha':'Recuperar senha';
   $('#signup-fields').hidden = mode !== 'register';
   $('#signup-fields').disabled = mode !== 'register';
   $('#login-fields').hidden = mode !== 'login';
   $('#login-fields').disabled = mode !== 'login';
-  $('#auth-submit').textContent = mode === 'login' ? 'Entrar' : 'Criar conta';
+  $('#recovery-fields').hidden=mode!=='forgot';$('#recovery-fields').disabled=mode!=='forgot';
+  $('#password-confirmation').hidden=mode!=='reset';$('#password-confirmation').disabled=mode!=='reset';
+  $('#auth-password-field').hidden=mode==='forgot';form.elements.password.disabled=mode==='forgot';
+  $('#forgot-password').hidden=mode!=='login';
+  $('#back-to-login').hidden=!recovering;
+  $('#remember-field').hidden=recovering;form.elements.remember.disabled=recovering;
+  $('#auth-submit').textContent = labels[mode];
   form.elements.password.autocomplete = mode === 'login' ? 'current-password' : 'new-password';
   form.elements.password.minLength = mode === 'login' ? 1 : 10;
-  $('#password-note').hidden = mode !== 'register';
+  $('#password-note').hidden = !['register','reset'].includes(mode);
+  form.elements.passwordConfirmation.setCustomValidity('');
   document.querySelectorAll('[data-auth-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.authMode === mode)));
   const nextHeight=form.getBoundingClientRect().height;
   if(animate&&previousHeight&&nextHeight&&!matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -49,6 +65,10 @@ function setMode(next, animate=true) {
   }
 }
 document.querySelectorAll('[data-auth-mode]').forEach(button => button.onclick = () => setMode(button.dataset.authMode));
+$('#forgot-password').onclick=()=>{setMode('forgot');form.elements.recoveryEmail.focus();};
+$('#back-to-login').onclick=()=>{resetToken='';setMode('login');form.elements.identifier.focus();};
+form.elements.passwordConfirmation.addEventListener('input',()=>form.elements.passwordConfirmation.setCustomValidity(''));
+form.elements.password.addEventListener('input',()=>form.elements.passwordConfirmation.setCustomValidity(''));
 $('#toggle-password').onclick = () => {
   const show = form.elements.password.type === 'password';
   form.elements.password.type = show ? 'text' : 'password';
@@ -65,22 +85,42 @@ async function enter(data) {
 }
 form.addEventListener('submit', async event => {
   event.preventDefault();
+  if(mode==='reset'&&form.elements.password.value!==form.elements.passwordConfirmation.value){form.elements.passwordConfirmation.setCustomValidity('As senhas precisam ser iguais.');form.elements.passwordConfirmation.reportValidity();return;}
   const button = $('#auth-submit'); if (button.disabled) return;
-  button.disabled = true; button.textContent = mode === 'login' ? 'Entrando…' : 'Criando conta…';
+  button.disabled = true; button.textContent = ({login:'Entrando…',register:'Criando conta…',forgot:'Enviando…',reset:'Salvando…'})[mode];
   modeAnimation?.finish();
   $('#auth-error').textContent = '';
+  $('#auth-notice').textContent = '';
   try {
+    if(mode==='forgot'){
+      const result=await api('/api/password/forgot',{method:'POST',body:{email:form.elements.recoveryEmail.value}});
+      $('#auth-notice').textContent=result.message;return;
+    }
+    if(mode==='reset'){
+      await api('/api/password/reset',{method:'POST',body:{token:resetToken,password:form.elements.password.value}});
+      resetToken='';form.reset();button.disabled=false;setMode('login');
+      $('#auth-notice').textContent='Senha alterada. Entre com sua nova senha.';form.elements.identifier.focus();return;
+    }
     const data = Object.fromEntries(new FormData(form));
     data.remember = form.elements.remember.checked;
     const result = await api(mode === 'login' ? '/api/login' : '/api/register', { method: 'POST', body: data });
     form.reset();if(!['#pessoa/','#ressoa/'].some(prefix=>location.hash.startsWith(prefix)))location.hash='#foryou';await enter(result);
   } catch (error) { $('#auth-error').textContent = error.message; }
-  finally { button.disabled = false; button.textContent = mode === 'login' ? 'Entrar' : 'Criar conta'; }
+  finally { button.disabled = false; button.textContent = labels[mode]; }
 });
 window.addEventListener('sessionexpired', () => { location.replace('/?session=expired'+location.hash); });
 $('#auth-retry').onclick = () => start();
+window.addEventListener('hashchange',()=>{
+  const match=location.hash.match(/^#redefinir-senha\/([A-Za-z0-9_-]{43})$/);
+  if(!match)return;
+  resetToken=match[1];history.replaceState(null,'',location.pathname+location.search);
+  $('#auth-screen').hidden=false;$('#app-shell').hidden=true;document.body.classList.add('auth-open');
+  $('#auth-form').hidden=false;$('#auth-loading').hidden=true;$('#auth-retry').hidden=true;
+  setMode('reset',false);form.elements.password.focus();
+});
 async function start() {
   $('#auth-loading').hidden = false; $('#auth-retry').hidden = true; $('#auth-form').hidden = true;
+  if(resetToken){setMode('reset',false);$('#auth-form').hidden=false;$('#auth-loading').hidden=true;form.elements.password.focus();return;}
   try {
     const session = await api('/api/session');
     if (session.authenticated) await enter(await api('/api/bootstrap'));

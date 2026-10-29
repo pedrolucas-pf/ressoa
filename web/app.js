@@ -3,7 +3,7 @@ import { createTrackPicker } from './track-picker.js';
 import { weekKey, nextWeekLabel, lockedForWeek } from './weekly.js';
 import { createPlayback } from './playback.js';
 import { authorKey, rememberSeen } from './social.js';
-import { rankFeed, isInFeed, FEED_LIMIT, FEED_REFRESH_MS } from './feed.js';
+import { rankFeed, isInFeed, wasSeen, FEED_LIMIT, FEED_REFRESH_MS } from './feed.js';
 import { createShareImage, downloadFile } from './share.js';
 import { newId } from './id.js';
 import { fitText } from './text-layout.js';
@@ -93,6 +93,7 @@ let collection = 'entries';
 let storyIndex = 0;
 let stories = [];
 let feedPoolVersions=new Map(),feedDisplayKey='';
+let feedRefreshJob=null;
 const feedPosts = () => [...entries,...publicPosts,...(myWeeklyPost()?[myWeeklyPost()]:[])];
 const allPosts = () => [...new Map([...(linkedPost?[linkedPost]:[]),...publicPosts,...(visitedProfile?[...visitedProfile.entries,...visitedProfile.reposts,...(visitedProfile.weekly?[visitedProfile.weekly]:[])]:[]),...entries,...(myWeeklyPost()?[myWeeklyPost()]:[])].map(post=>[post.id,post])).values()];
 const cover = track => musicDetails[track]?.artwork || 'assets/cover-unavailable.svg';
@@ -150,7 +151,8 @@ function renderStories(reset = false,preserveOrder = false) {
   const previousId=stories[storyIndex]?.id,previousIndex=storyIndex;
   const following = new Set(social.following);
   const include = post => feedMode === 'foryou' || (!isMine(post) && following.has(authorKey(post)));
-  const featured = weeklyPost(include);
+  const unread=feedPosts().some(post=>include(post)&&isInFeed(post)&&!wasSeen(post,social.seen));
+  const featured = weeklyPost(post=>include(post)&&(!unread||!wasSeen(post,social.seen)));
   const pool = feedPosts().filter(post => isInFeed(post) && include(post) && post.id !== featured?.id).map(post => ({ ...post, ownerId: isMine(post) ? 'me' : authorKey(post),featured:post.kind==='weekly' }));
   const candidates=new Map([...pool,...(featured?[{...featured,featured:true}]:[])].map(post=>[post.id,post]));
   const versions=new Map([...candidates].map(([id,post])=>[id,post.publishedAt||post.createdAt||'']));
@@ -230,6 +232,11 @@ textObserver.observe($('#story-viewport'));textObserver.observe($('#profile-cont
 textObserver.observe($('#diary-entries'));
 document.fonts.ready.then(scheduleTextLayout);
 function moveStory(index, markSeen = true) {
+  if(markSeen&&feedRefreshJob)return;
+  if(markSeen&&stories.length&&index>=stories.length){
+    rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);
+    void refreshFeedBatch(true);return;
+  }
   if (markSeen && Date.now() - feedGeneratedAt >= FEED_REFRESH_MS) {
     feedGeneratedAt = Date.now();void refreshView();
   }
@@ -260,10 +267,26 @@ $('#feed-filters').addEventListener('keydown',event=>{
  selectFeed(buttons[next].dataset.feedMode);buttons[next].focus();
 });
 $('#feed-find-people').addEventListener('click',()=>{if($('#people-search').dataset.open!=='true')$('#toggle-people-search').click();$('#people-query').focus();});
-$('#refresh-feed').addEventListener('click', async () => {
- const button=$('#refresh-feed');button.disabled=true;button.setAttribute('aria-busy','true');
- try{await refreshAccount();feedGeneratedAt=Date.now();const changed=renderStories(true,true);toast(changed?'Feed atualizado.':'Nenhum Ressoa novo.');}catch(error){toast(error.message);}finally{button.disabled=false;button.removeAttribute('aria-busy');}
-});
+function refreshFeedBatch(wrap=false) {
+ if(feedRefreshJob)return feedRefreshJob;
+ const mode=feedMode,current=new Map(stories.map(post=>[post.id,post.publishedAt||post.createdAt]));
+ const button=$('#refresh-feed');button.disabled=true;button.setAttribute('aria-busy','true');$('#story-viewport').setAttribute('aria-busy','true');
+ feedRefreshJob=(async()=>{
+  try{
+   const refreshed=await refreshAccount({mode,seen:{...social.seen}});
+   if(!refreshed){if(wrap&&mode===feedMode)moveStory(0,false);return;}
+   feedGeneratedAt=Date.now();
+   if(mode!==feedMode){renderStories(false,true);return;}
+   const fresh=feedPosts().some(post=>isInFeed(post)&&(mode==='foryou'||(!isMine(post)&&social.following.includes(authorKey(post))))
+    &&!wasSeen(post,social.seen)&&current.get(post.id)!==(post.publishedAt||post.createdAt));
+   if(fresh){feedEpoch++;renderStories(true);}
+   else{renderStories(false,true);if(wrap)moveStory(0,false);if(!wrap)toast('Nenhum Ressoa novo.');}
+  }catch(error){if(wrap&&mode===feedMode)moveStory(0,false);toast(error.message);}
+  finally{button.disabled=false;button.removeAttribute('aria-busy');$('#story-viewport').removeAttribute('aria-busy');feedRefreshJob=null;}
+ })();
+ return feedRefreshJob;
+}
+$('#refresh-feed').addEventListener('click',()=>void refreshFeedBatch());
 
 const savingPosts=new Set();
 document.addEventListener('click',async event=>{

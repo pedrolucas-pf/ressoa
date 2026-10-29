@@ -3,6 +3,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 from time import perf_counter
 from contextlib import nullcontext
 from http import HTTPStatus
@@ -10,6 +11,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, unquote
 from database import APIError, Database
+from mail import PasswordRecovery
 from services import ServiceError, search_tracks, get_track, lyrics, login_artwork
 
 ROOT = Path(__file__).resolve().parent
@@ -31,6 +33,7 @@ class Application:
             raise RuntimeError('Defina DATABASE_URL do Neon antes de publicar.')
         source=database_path if database_path is not None else os.getenv('DATABASE_URL') or os.getenv('DATABASE_PATH') or str(ROOT/'storage'/'ressoa.sqlite3')
         self.db=Database(source)
+        self.password_recovery=PasswordRecovery(self.db)
 
     def __call__(self, env, start_response):
         started = perf_counter()
@@ -119,6 +122,21 @@ class Application:
         token = self.token(env)
         user_id = self.db.session_user(token) if token else None
         data = self.body(env) if method in ('POST', 'PUT', 'DELETE') else {}
+        if path == '/api/password/forgot' and method == 'POST':
+            self.db.limit('recovery-ip:'+env.get('REMOTE_ADDR',''), 5, 900)
+            email = data.get('email')
+            if not isinstance(email,str) or len(email)>254 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email.strip()):
+                raise APIError(400,'Confira o e-mail cadastrado.')
+            email=email.strip().lower()
+            self.db.limit('recovery-email:'+email,3,900)
+            self.db.limit('recovery-global',100,3600)
+            origin=self.origin or f"{env.get('wsgi.url_scheme','http')}://{env.get('HTTP_HOST','')}"
+            self.password_recovery.request(email,origin)
+            return 200, {'message':'Se houver uma conta com esse e-mail, você receberá um link para redefinir a senha. Confira também o spam.'}, []
+        if path == '/api/password/reset' and method == 'POST':
+            self.db.limit('recovery-reset-ip:'+env.get('REMOTE_ADDR',''),20,900)
+            self.db.reset_password(data)
+            return 200, {'ok':True}, self.cookie('',clear=True)
         if path in ('/api/register', '/api/login') and method == 'POST':
             self.db.limit('auth-ip:' + env.get('REMOTE_ADDR', ''), 100)
             if path == '/api/register':
@@ -145,6 +163,9 @@ class Application:
         value = lambda key, default='': params.get(key, [default])[0]
         if path == '/api/bootstrap' and method == 'GET':
             return 200, self.db.bootstrap(user_id), []
+        if path == '/api/feed' and method == 'POST':
+            self.db.limit('feed-read:'+user_id,60,60)
+            return 200, self.db.bootstrap(user_id,feed_options=data), []
         if path == '/api/post' and method == 'GET':
             self.db.limit('post-read:'+user_id,90,60)
             return 200, {'post':self.db.shared_post(user_id,value('id'))}, []

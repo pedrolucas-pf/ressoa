@@ -19,6 +19,7 @@
       <div class="auth-intro"><h1>Escreva o que pensa, sente, o que quiser.</h1></div>
       <div class="auth-panel">
         <div class="auth-tabs" aria-label="Acessar conta"><button type="button" data-auth-mode="login" aria-pressed="true">Entrar</button><button type="button" data-auth-mode="register" aria-pressed="false">Criar conta</button></div>
+        <h2 id="recovery-title" hidden></h2>
         <p id="auth-loading" role="status" class="form-note">Conectando…</p><button id="auth-retry" class="text-button" hidden>Tentar novamente</button>
         <form id="auth-form" hidden>
           <fieldset id="signup-fields" hidden disabled>
@@ -27,11 +28,16 @@
             <label>Nome de usuário<input name="username" autocomplete="username" required minlength="1" maxlength="48" autocapitalize="none" spellcheck="false" placeholder="seu.usuario" title="Use de 1 a 24 caracteres, sem emojis."></label>
           </fieldset>
           <fieldset id="login-fields"><label>E-mail ou usuário<input name="identifier" autocomplete="username" required maxlength="254" autocapitalize="none" spellcheck="false" placeholder="E-mail ou @usuário exato" title="Ao entrar com usuário, digite as letras maiúsculas e minúsculas como no cadastro."></label></fieldset>
-          <label>Senha<span class="password-field"><input name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Sua senha"><button id="toggle-password" type="button" aria-pressed="false">Mostrar</button></span></label>
+          <fieldset id="recovery-fields" hidden disabled><label>E-mail cadastrado<input name="recoveryEmail" type="email" autocomplete="email" required maxlength="254" placeholder="voce@email.com"></label></fieldset>
+          <label id="auth-password-field">Senha<span class="password-field"><input name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Sua senha"><button id="toggle-password" type="button" aria-pressed="false">Mostrar</button></span></label>
           <p id="password-note" class="form-note" hidden>Use pelo menos 10 caracteres.</p>
-          <label class="remember-field"><input type="checkbox" name="remember">Manter conectado neste dispositivo</label>
+          <fieldset id="password-confirmation" hidden disabled><label>Confirme a nova senha<input name="passwordConfirmation" type="password" autocomplete="new-password" required minlength="10" maxlength="128" placeholder="Repita a nova senha"></label></fieldset>
+          <button type="button" id="forgot-password" class="text-button">Esqueceu a senha?</button>
+          <label class="remember-field" id="remember-field"><input type="checkbox" name="remember">Manter conectado neste dispositivo</label>
           <p id="auth-error" class="auth-error" role="alert"></p>
+          <p id="auth-notice" class="form-note" role="status"></p>
           <button id="auth-submit" class="button primary" type="submit">Entrar</button>
+          <button type="button" id="back-to-login" class="text-button" hidden>Voltar para entrar</button>
         </form>
         <p class="auth-footnote">Sua música. Sua história. Seu lugar.</p>
       </div>

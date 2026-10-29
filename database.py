@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS users (
  is_private INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS password_resets (
+ token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS password_resets_expiry ON password_resets(expires_at);
 CREATE TABLE IF NOT EXISTS tracks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS posts (
  id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -144,7 +148,7 @@ CREATE TABLE IF NOT EXISTS shares (
  method TEXT NOT NULL CHECK(method IN ('native','link')), updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,post_id)
 );
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 """
 
 
@@ -355,6 +359,41 @@ class Database:
         with self.transaction() as db:
             db.execute('DELETE FROM sessions WHERE token_hash=?', (hashlib.sha256(token.encode()).hexdigest(),))
 
+    def request_password_reset(self, email):
+        token = secrets.token_urlsafe(32)
+        with self.transaction() as db:
+            db.execute('DELETE FROM password_resets WHERE expires_at<=?', (time.time(),))
+            user = db.execute('SELECT id,email FROM users WHERE username_key(email)=username_key(?)', (email,)).fetchone()
+            if not user:
+                return None
+            db.execute('''INSERT INTO password_resets VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+                token_hash=excluded.token_hash,expires_at=excluded.expires_at''',
+                (hashlib.sha256(token.encode()).hexdigest(), user['id'], time.time()+1800))
+        return dict(email=user['email'], token=token)
+
+    def discard_password_reset(self, token):
+        with self.transaction() as db:
+            db.execute('DELETE FROM password_resets WHERE token_hash=?', (hashlib.sha256(token.encode()).hexdigest(),))
+
+    def reset_password(self, data):
+        token, password = data.get('token'), data.get('password')
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+            raise APIError(400, 'Esse link é inválido ou expirou. Solicite outro link.')
+        if not isinstance(password, str) or not 10 <= len(password) <= 128:
+            raise APIError(400, 'Use uma senha de 10 a 128 caracteres.')
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        with self.connect() as db:
+            if not db.execute('SELECT 1 FROM password_resets WHERE token_hash=? AND expires_at>?', (token_hash,time.time())).fetchone():
+                raise APIError(400, 'Esse link é inválido ou expirou. Solicite outro link.')
+        encoded = password_hash(password)
+        with self.transaction() as db:
+            # Consuming the token and replacing the password must succeed together.
+            user = db.execute('DELETE FROM password_resets WHERE token_hash=? AND expires_at>? RETURNING user_id', (token_hash,time.time())).fetchone()
+            if not user:
+                raise APIError(400, 'Esse link é inválido ou expirou. Solicite outro link.')
+            db.execute('UPDATE users SET password_hash=? WHERE id=?', (encoded,user['user_id']))
+            db.execute('DELETE FROM sessions WHERE user_id=?', (user['user_id'],))
+
     @staticmethod
     def store_track(db, value):
         track = clean_track(value)
@@ -474,7 +513,37 @@ class Database:
             row = self.accessible(db, user_id, text(post_id, 1, 100))
             return self.post(db, row)
 
-    def bootstrap(self, user_id):
+    @staticmethod
+    def clean_seen(value):
+        if not isinstance(value, dict) or len(value)>300:
+            raise APIError(400, 'Histórico inválido.')
+        now = time.time()*1000
+        return {key:stamp for key,stamp in value.items() if isinstance(key,str) and len(key)<=100
+                and type(stamp) in (int,float) and now-7*86400000<stamp<=now+60000}
+
+    def feed_query(self, user_id, mode, seen):
+        if mode not in ('foryou','following'):
+            raise APIError(400, 'Feed inválido.')
+        seen = self.clean_seen(seen)
+        values = ','.join('(?,?)' for _ in seen) or '(NULL,NULL)'
+        parameters = [part for item in seen.items() for part in item]
+        published = "COALESCE(NULLIF(p.feed_published_at,''),p.created_at)"
+        stamp = f'EXTRACT(EPOCH FROM CAST({published} AS timestamptz))*1000' if self.is_postgres else f"(julianday({published})-2440587.5)*86400000"
+        access, access_params = self.visible_author_sql(user_id)
+        followed = 'EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id)'
+        restriction = f' AND {followed}' if mode=='following' else ''
+        cutoff = (datetime.now(timezone.utc)-timedelta(days=1)).timestamp()*1000
+        statement = f'''WITH viewed(id,seen_at) AS (VALUES {values})
+            SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id LEFT JOIN viewed v ON v.id=p.id
+            WHERE p.visibility='public' AND p.owner_id<>? AND {access}{restriction}
+            AND (p.kind='weekly' OR {stamp}>?)
+            AND (p.kind='entry' OR EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL))
+            ORDER BY CASE WHEN CAST(v.seen_at AS DOUBLE PRECISION)>={stamp} THEN 1 ELSE 0 END,
+                {followed} DESC,{stamp} DESC,p.id LIMIT 120'''
+        parameters.extend((user_id,*access_params,*([user_id] if mode=='following' else []),cutoff,current_week(),user_id))
+        return statement, tuple(parameters)
+
+    def bootstrap(self, user_id, feed_options=None):
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
             access,access_params=self.visible_author_sql(user_id)
@@ -500,7 +569,12 @@ class Database:
                 ('SELECT u.id,u.display_name,u.username,u.photo,r.created_at FROM follow_requests r JOIN users u ON u.id=r.user_id WHERE r.target_id=? ORDER BY r.created_at,u.id', (user_id,)),
                 ('SELECT target_id FROM follow_requests WHERE user_id=?', (user_id,)),
             ]
-            users,own,public,extra,selections,actions,following,followers,request_rows,requested_rows = db.fetch_many(queries)
+            if feed_options is not None:
+                queries.append(self.feed_query(user_id,feed_options.get('mode'),feed_options.get('seen',{})))
+            results = db.fetch_many(queries)
+            users,own,public,extra,selections,actions,following,followers,request_rows,requested_rows = results[:10]
+            if feed_options is not None:
+                public = [*public,*results[10]]
             user = users[0]
             shared = {row['id']: row for row in [*public, *extra] if row['owner_id'] != user_id}
             selection = selections[0] if selections else None
@@ -747,10 +821,7 @@ class Database:
                 clean = dict(text=message, track=track, visibility='public' if value.get('visibility') == 'public' else 'private',lyricExcerpt=self.clean_excerpt(value.get('lyricExcerpt','')))
                 db.execute('UPDATE users SET draft=? WHERE id=?', (json.dumps(clean), user_id))
         elif key == 'seen':
-            if not isinstance(value, dict) or len(value) > 300:
-                raise APIError(400, 'Histórico inválido.')
-            now = time.time() * 1000
-            clean = {key: value for key, value in value.items() if isinstance(value, (int, float)) and now - 7*86400000 < value <= now + 60000}
+            clean = self.clean_seen(value)
             with self.transaction() as db:
                 db.execute('UPDATE users SET seen=? WHERE id=?', (json.dumps(clean), user_id))
         else:

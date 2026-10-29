@@ -20,7 +20,7 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 
 ## Funcionalidades
 
-- **For you:** navegação entre Ressoas, prévias de áudio sobre as capas e prioridade para pessoas que você segue. A aba **Seguindo** mostra apenas publicações dos perfis seguidos. Publicações comuns aparecem no feed por 24 horas e continuam disponíveis no perfil.
+- **For you:** até 10 Ressoas por seleção, prévias de áudio sobre as capas e prioridade para pessoas que você segue. A aba **Seguindo** mostra apenas publicações dos perfis seguidos. Ao avançar depois do último, outra seleção prioriza os ainda não vistos; sem novidades, a sequência volta ao início. Publicações comuns aparecem no feed por 24 horas e continuam disponíveis no perfil.
 - **Meus sons:** diário em blocos, com criação, edição, exclusão e controle de visibilidade das publicações.
 - **Ressoa da semana:** uma escolha por semana, independente do diário e em destaque no feed e no perfil.
 - **Músicas e letras:** busca de faixas, capas, metadados, prévias e seleção de um trecho da letra para compor a publicação, conforme disponibilidade.
@@ -60,6 +60,7 @@ ressoa/
 ├── database.py             # Persistência e regras de negócio
 ├── postgres_storage.py     # Adaptação das consultas para PostgreSQL
 ├── services.py             # Integrações musicais
+├── mail.py                 # Recuperação de senha pela API de e-mail
 ├── serve.py                # Servidor de desenvolvimento
 ├── Dockerfile              # Imagem da aplicação
 ├── gunicorn.conf.py        # Configuração do servidor de produção
@@ -75,6 +76,9 @@ A versão online roda no **Render**, com os dados no **Neon**. O Dockerfile defi
 | `RESSOA_ENV` | `production` |
 | `DATABASE_URL` | Conexão PostgreSQL do Neon, cadastrada como segredo no Render |
 | `APP_ORIGIN` | URL HTTPS de um domínio próprio, quando utilizado |
+| `BREVO_API_KEY` | Chave privada da API da Brevo, para recuperar senhas |
+| `EMAIL_FROM` | Endereço remetente verificado na Brevo |
+| `EMAIL_FROM_NAME` | Nome do remetente; padrão: `Ressoa` |
 
 No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`. O servidor escuta em `0.0.0.0:$PORT`.
 
@@ -84,4 +88,18 @@ Contas e publicações permanecem no Neon ao atualizar a aplicação. Uma instal
 
 Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos. Um monitor externo pode reduzir essa espera, sujeito aos limites do plano. O monitor precisa estar configurado e ativo fora da aplicação; este repositório não instala agendamentos por conta própria.
 
-Recuperação de senha por e-mail e ferramentas de moderação ainda não estão implementadas.
+### Recuperação de senha
+
+Na tela de entrada, **Esqueceu a senha?** envia um link ao e-mail cadastrado. Ele expira em 30 minutos e só pode ser usado uma vez. O banco armazena somente o hash do token; trocar a senha encerra as sessões anteriores sem alterar o perfil, as publicações ou as interações. A resposta do formulário não revela se um e-mail possui conta.
+
+Para ativar o envio:
+
+1. Crie uma conta na [Brevo](https://www.brevo.com/) e conclua a ativação dos e-mails transacionais.
+2. Em **Senders / Remetentes**, cadastre e verifique um endereço de e-mail seu. Um domínio próprio autenticado é recomendado para melhorar a entrega.
+3. Gere uma **chave de API** da Brevo (não a senha SMTP).
+4. No Render, em **Environment**, cadastre `BREVO_API_KEY`, `EMAIL_FROM` e, se quiser, `EMAIL_FROM_NAME`. Salve e aguarde a atualização do serviço. Não coloque esses valores no GitHub.
+5. Solicite a recuperação para uma conta de teste sua e confirme a entrega, a redefinição e o login com a nova senha. Consulte os registros transacionais da Brevo se houver falha na entrega.
+
+A integração usa HTTPS, compatível com o plano gratuito do Render. Sem a chave e o remetente, o formulário informa que a recuperação ainda está indisponível. O link usa a origem pública configurada no servidor, e seu token fica no fragmento da URL, fora dos logs HTTP. Pedidos têm limites de frequência e uma fila pequena de envio; falhas do provedor são registradas sem expor endereços ou tokens.
+
+Ferramentas de moderação ainda não estão implementadas.
