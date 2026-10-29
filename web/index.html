@@ -63,8 +63,14 @@
   </header>
   <main>
     <section id="for-you" aria-label="For you">
-      <div class="feed-tools"><span class="local-status" id="account-status">Conectado</span><button class="icon-button" id="refresh-feed" aria-label="Atualizar feed" title="Atualizar feed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c0-1.7 2.2-2.5 3.5-1.3 1.8 1.6.6 4.7-1.8 5.3-3.4.9-6.9-1.6-6.9-5.1 0-4.4 5-7.5 9.2-5.7 3.1 1.3 4.9 4.5 4.3 7.8-.9 4.9-6.4 8-11 6.1m2.9-1.4-2.9 1.4 1.4 2.9"/></svg></button></div>
-      <div id="feed-empty" class="feed-empty" hidden><h1>Nenhum Ressoa novo.</h1><a class="button" href="#diario">Escrever uma ressoa</a></div>
+      <div class="feed-tools">
+        <div class="feed-tabs" id="feed-filters" role="group" aria-label="Filtrar publicações">
+          <button type="button" data-feed-mode="foryou" aria-pressed="true">For you</button>
+          <button type="button" data-feed-mode="following" aria-pressed="false">Seguindo</button>
+        </div>
+        <div class="feed-status"><span class="local-status" id="account-status">Conectado</span><button class="icon-button" id="refresh-feed" aria-label="Atualizar feed" title="Atualizar feed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c0-1.7 2.2-2.5 3.5-1.3 1.8 1.6.6 4.7-1.8 5.3-3.4.9-6.9-1.6-6.9-5.1 0-4.4 5-7.5 9.2-5.7 3.1 1.3 4.9 4.5 4.3 7.8-.9 4.9-6.4 8-11 6.1m2.9-1.4-2.9 1.4 1.4 2.9"/></svg></button></div>
+      </div>
+      <div id="feed-empty" class="feed-empty" hidden><h1 id="feed-empty-title">Nenhum Ressoa novo.</h1><a class="button" id="feed-empty-write" href="#diario">Escrever uma ressoa</a><button type="button" class="button" id="feed-find-people" hidden>Buscar pessoas</button></div>
       <div class="story-progress" id="story-progress" aria-label="Publicações"></div>
       <div class="story-viewport" id="story-viewport">
         <div id="story-track" class="story-track"></div>

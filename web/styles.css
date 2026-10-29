@@ -346,6 +346,14 @@ form .picker-search input.catalog-query { min-width: 0; margin: 0; padding: 12px
 
 /* Publication layout and actions */
 .feed-tools { display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:12px; }
+.feed-tabs {display:flex;align-items:center;gap:24px;flex-shrink:0;}
+.feed-tabs button {padding:10px 0;border-bottom:1px solid transparent;color:var(--muted);font-size:13px;white-space:nowrap;}
+.feed-tabs button:hover,.feed-tabs button[aria-pressed="true"] {color:var(--text);}
+.feed-tabs button[aria-pressed="true"] {border-color:var(--text);}
+.feed-tabs button:focus-visible {outline:1px solid var(--text);outline-offset:4px;}
+.feed-status {display:flex;align-items:center;gap:12px;min-width:0;}
+.feed-status .local-status {max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+@media(max-width:600px){.feed-tools{gap:12px}.feed-tabs{gap:18px}.feed-tabs button{font-size:12px}.feed-status{gap:4px}.feed-status .local-status{max-width:100px}}
 .local-status {font-size:10px;color:var(--muted)}
 .cover-stage {position:relative}
 .lyric-art {display:block;position:relative;container-type:inline-size;width:100%;aspect-ratio:1;overflow:hidden;border-radius:inherit;background:#101010;isolation:isolate;}

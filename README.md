@@ -20,7 +20,7 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 
 ## Funcionalidades
 
-- **For you:** navegação entre Ressoas, prévias de áudio sobre as capas e prioridade para pessoas que você segue. Publicações comuns aparecem no feed por 24 horas e continuam disponíveis no perfil.
+- **For you:** navegação entre Ressoas, prévias de áudio sobre as capas e prioridade para pessoas que você segue. A aba **Seguindo** mostra apenas publicações dos perfis seguidos. Publicações comuns aparecem no feed por 24 horas e continuam disponíveis no perfil.
 - **Meus sons:** diário em blocos, com criação, edição, exclusão e controle de visibilidade das publicações.
 - **Ressoa da semana:** uma escolha por semana, independente do diário e em destaque no feed e no perfil.
 - **Músicas e letras:** busca de faixas, capas, metadados, prévias e seleção de um trecho da letra para compor a publicação, conforme disponibilidade.
