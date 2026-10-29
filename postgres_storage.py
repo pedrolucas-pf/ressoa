@@ -1,7 +1,7 @@
 """PostgreSQL adapter for the existing parameterized repository queries.
 
 No connection string is written to disk or included in an exception. SQLite
-remains the zero-dependency local backend; this module is loaded only for PG.
+remains the local backend; this module is loaded only for PG.
 """
 import re
 import sqlite3
@@ -152,7 +152,7 @@ class ConnectionLease:
 SEARCH_FUNCTION = r"""
 CREATE OR REPLACE FUNCTION search_key(value TEXT) RETURNS TEXT
 LANGUAGE SQL IMMUTABLE PARALLEL SAFE AS $ressoa$
- SELECT regexp_replace(lower(normalize(coalesce(value,''),NFKD)),U&'[\0300-\036f]','','g')
+ SELECT regexp_replace(normalize(username_key(coalesce(value,'')),NFKD),U&'[\0300-\036f]','','g')
 $ressoa$
 """
 
@@ -163,6 +163,14 @@ def initialize(dsn, sqlite_schema):
     with PostgresConnection(dsn) as db:
         db.execute('BEGIN')
         db.execute('SELECT pg_advisory_xact_lock(?)',(WRITE_LOCK,))
+        # Compare Unicode names independently of the database's default locale.
+        collation = db.execute("SELECT collname FROM pg_collation WHERE collname IN ('und-x-icu','pg_c_utf8') ORDER BY CASE WHEN collname='und-x-icu' THEN 0 ELSE 1 END LIMIT 1").fetchone()
+        if not collation:
+            raise RuntimeError('O PostgreSQL precisa de uma collation Unicode para os nomes de usuário.')
+        db.execute(f'''CREATE OR REPLACE FUNCTION username_key(value TEXT) RETURNS TEXT
+            LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE AS $ressoa$
+            SELECT lower(normalize(value,NFC) COLLATE "{collation['collname']}")
+            $ressoa$''')
         for statement in schema.split(';'):
             if statement.strip():db.execute(statement)
         db.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private INTEGER NOT NULL DEFAULT 0')
@@ -170,6 +178,8 @@ def initialize(dsn, sqlite_schema):
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS feed_published_at TEXT NOT NULL DEFAULT ''")
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_email_ci ON users(lower(email))')
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_ci ON users(lower(username))')
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unicode_ci ON users(username_key(username))')
+        db.execute('CREATE INDEX IF NOT EXISTS users_email_unicode ON users(username_key(email))')
         db.execute(SEARCH_FUNCTION)
         db.execute('CREATE TABLE IF NOT EXISTS ressoa_schema (version INTEGER PRIMARY KEY)')
         db.execute('INSERT INTO ressoa_schema VALUES (1) ON CONFLICT DO NOTHING')

@@ -1,9 +1,11 @@
 import { api, setSnapshot } from './session.js';
 import { loadLoginArtwork } from './login-artwork.js';
+import { bindUsernameValidation } from './username.js';
 
 const $ = selector => document.querySelector(selector);
 let mode = 'login', loaded = false;
 const form = $('#auth-form');
+bindUsernameValidation(form.elements.username);
 function renderCovers(pool) {
   const unique=new Map();
   for(const item of pool) {

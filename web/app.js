@@ -11,6 +11,7 @@ import { albumArt, fitLyricArt } from './post-art.js';
 import { createLyricPicker } from './lyric-picker.js';
 import { ensureTrackDetails, durationLabel, trackSummary } from './track-context.js';
 import { createPeopleSearch, personHref } from './people-search.js';
+import { bindUsernameValidation, normalizeUsername, usernameError } from './username.js';
 import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, actionPending, hydratePublicProfile, hydratePost } from './session.js';
 
 const $ = selector => document.querySelector(selector);
@@ -76,7 +77,7 @@ function cleanProfile(value) {
   if (!value || typeof value !== 'object') return { ...defaultProfile };
   return {
     displayName: typeof value.displayName === 'string' ? value.displayName.slice(0, 50) : defaultProfile.displayName,
-    handle: /^[a-z0-9._]{3,24}$/.test(value.handle || '') ? value.handle : defaultProfile.handle,
+    handle: !usernameError(value.handle) ? normalizeUsername(value.handle) : defaultProfile.handle,
     bio: typeof value.bio === 'string' ? value.bio.slice(0, 180) : '',
     photo: typeof value.photo === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value.photo) ? value.photo : '',
     isPrivate:value.isPrivate===true,
@@ -706,6 +707,7 @@ $('#profile-content').addEventListener('click', event => {
 });
 
 const profileForm = $('#profile-form');
+bindUsernameValidation(profileForm.elements.handle);
 let pendingPhoto = '';
 let pendingBackground = null;
 const backgroundPicker = createTrackPicker($('#background-track-picker'), { ...pickerOptions, onChange: index => { pendingBackground = index; } });
@@ -727,6 +729,7 @@ $('#edit-profile').addEventListener('click', () => {
   renderFavoriteOptions();
   profileForm.elements.displayName.value = profileInfo.displayName;
   profileForm.elements.handle.value = profileInfo.handle;
+  profileForm.elements.handle.setCustomValidity('');
   profileForm.elements.bio.value = profileInfo.bio;
   profileForm.elements.isPrivate.checked=profileInfo.isPrivate;
   for (let i = 0; i < 6; i++) {

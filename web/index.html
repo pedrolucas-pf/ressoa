@@ -24,7 +24,7 @@
           <fieldset id="signup-fields" hidden disabled>
             <label>Seu nome<input name="displayName" autocomplete="name" required minlength="2" maxlength="50" placeholder="Como podemos chamar você?"></label>
             <label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254" placeholder="voce@email.com"></label>
-            <label>Nome de usuário<input name="username" autocomplete="username" required pattern="[a-z0-9._]{3,24}" minlength="3" maxlength="24" autocapitalize="none" spellcheck="false" placeholder="seu.usuario" title="3 a 24 letras minúsculas, números, ponto ou sublinhado."></label>
+            <label>Nome de usuário<input name="username" autocomplete="username" required minlength="1" maxlength="48" autocapitalize="none" spellcheck="false" placeholder="seu.usuario" title="Use de 1 a 24 caracteres, sem emojis."></label>
           </fieldset>
           <fieldset id="login-fields"><label>E-mail ou usuário<input name="identifier" autocomplete="username" required maxlength="254" autocapitalize="none" spellcheck="false" placeholder="Seu e-mail ou @usuário"></label></fieldset>
           <label>Senha<span class="password-field"><input name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Sua senha"><button id="toggle-password" type="button" aria-pressed="false">Mostrar</button></span></label>
@@ -148,7 +148,7 @@
       <div class="dialog-heading"><h2 id="profile-editor-title">Editar perfil</h2><button type="button" class="icon-button" data-close="profile-editor" aria-label="Fechar perfil">×</button></div>
       <div class="photo-editor"><span id="photo-preview"></span><button type="button" class="text-button" id="choose-photo">Escolher foto</button><input id="profile-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden><button type="button" class="text-button" id="remove-photo">Remover foto</button></div>
       <label>Nome<input name="displayName" required minlength="2" maxlength="50" autocomplete="name"></label>
-      <label>Nome de usuário<input name="handle" required pattern="[a-z0-9._]{3,24}" minlength="3" maxlength="24" autocapitalize="none" spellcheck="false" title="Use 3 a 24 letras minúsculas, números, ponto ou sublinhado."></label>
+      <label>Nome de usuário<input name="handle" required minlength="1" maxlength="48" autocapitalize="none" spellcheck="false" title="Use de 1 a 24 caracteres, sem emojis."></label>
       <label>Bio<textarea name="bio" maxlength="180" rows="3"></textarea></label>
       <label class="checkbox-label"><input type="checkbox" name="isPrivate">Perfil privado</label>
       <p class="form-note">Somente seguidores aprovados veem seus Ressoas e reposts. Seguidores atuais são mantidos; você pode removê-los no perfil.</p>

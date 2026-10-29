@@ -9,6 +9,7 @@ import sqlite3
 import time
 import uuid
 import unicodedata
+import regex
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,22 @@ def text(value, minimum=0, maximum=2400):
     if not isinstance(value, str) or not minimum <= len(value.strip()) <= maximum:
         raise APIError(400, 'Confira os campos e o tamanho do texto.')
     return value.strip()
+
+
+_USERNAME_EMOJI = regex.compile(r'[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\uFE0F\u20E3]')
+
+
+def clean_username(value):
+    if not isinstance(value, str):
+        raise APIError(400, 'Informe um nome de usuário.')
+    value = unicodedata.normalize('NFC', value).strip().lstrip('@').strip()
+    if not 1 <= len(value) <= 24:
+        raise APIError(400, 'Use de 1 a 24 caracteres no nome de usuário.')
+    if _USERNAME_EMOJI.search(value):
+        raise APIError(400, 'O nome de usuário não pode conter emojis.')
+    if not value.isprintable():
+        raise APIError(400, 'Use apenas caracteres visíveis no nome de usuário.')
+    return value
 
 
 def password_hash(password, salt=None):
@@ -205,6 +222,7 @@ class Database:
         db = sqlite3.connect(self.path, timeout=15, factory=Connection)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
+        db.create_function('username_key', 1, lambda value: unicodedata.normalize('NFC',value).lower() if isinstance(value,str) else None, deterministic=True)
         db.create_function('search_key',1,lambda value: ''.join(character for character in unicodedata.normalize('NFKD',str(value or '')).casefold() if not unicodedata.combining(character)),deterministic=True)
         db._track_cache={};db._person_cache={}
         return db
@@ -241,16 +259,17 @@ class Database:
 
     def register(self, data):
         email = text(data.get('email'), 5, 254).lower()
-        username, name = text(data.get('username'), 3, 24).lower(), text(data.get('displayName'), 2, 50)
+        username, name = clean_username(data.get('username')), text(data.get('displayName'), 2, 50)
         password = data.get('password')
         if not isinstance(password, str) or not 10 <= len(password) <= 128:
             raise APIError(400, 'Use uma senha de 10 a 128 caracteres.')
-        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or not re.fullmatch(r'[a-z0-9._]{3,24}', username):
-            raise APIError(400, 'Confira o e-mail e o nome de usuário.')
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
+            raise APIError(400, 'Confira o e-mail.')
         self.check_registration(email, username)
         encoded, user_id = password_hash(password), str(uuid.uuid4())
         try:
             with self.transaction() as db:
+                self.check_registration(email, username, db)
                 db.execute('INSERT INTO users (id,email,username,password_hash,display_name,created_at) VALUES (?,?,?,?,?,?)', (user_id, email, username, encoded, name, now_iso()))
         except sqlite3.IntegrityError:
             # The UNIQUE constraints also protect simultaneous registrations.
@@ -258,10 +277,13 @@ class Database:
             raise APIError(409, 'Não foi possível criar a conta. Confira o e-mail e o usuário.')
         return user_id
 
-    def check_registration(self, email, username):
-        with self.connect() as db:
-            email_used = bool(db.execute('SELECT 1 FROM users WHERE lower(email)=?', (email,)).fetchone())
-            username_used = bool(db.execute('SELECT 1 FROM users WHERE lower(username)=?', (username,)).fetchone())
+    def check_registration(self, email, username, db=None):
+        if db is None:
+            with self.connect() as db:
+                return self.check_registration(email, username, db)
+        # Login accepts either field, so another account cannot reuse either identity.
+        email_used = bool(db.execute('SELECT 1 FROM users WHERE username_key(email)=username_key(?) OR username_key(username)=username_key(?)', (email,email)).fetchone())
+        username_used = bool(db.execute('SELECT 1 FROM users WHERE username_key(username)=username_key(?) OR username_key(email)=username_key(?)', (username,username)).fetchone())
         if email_used and username_used:
             raise APIError(409, 'Esse e-mail e esse nome de usuário já estão em uso. Insira outro e-mail e outro usuário.')
         if email_used:
@@ -270,12 +292,12 @@ class Database:
             raise APIError(409, 'Esse nome de usuário já está em uso. Escolha outro para continuar.')
 
     def login(self, data):
-        identifier, password = text(data.get('identifier'), 1, 254).lower().lstrip('@'), data.get('password', '')
+        identifier, password = unicodedata.normalize('NFC',text(data.get('identifier'), 1, 254)).lstrip('@').strip(), data.get('password', '')
         if not isinstance(password, str) or len(password) > 128:
             raise APIError(401, 'E-mail, usuário ou senha incorretos.')
-        self.limit('login:' + identifier)
+        self.limit('login:' + identifier.lower())
         with self.connect() as db:
-            row = db.execute('SELECT id,password_hash FROM users WHERE lower(email)=? OR lower(username)=?', (identifier, identifier)).fetchone()
+            row = db.execute('SELECT id,password_hash FROM users WHERE username_key(email)=username_key(?) OR username_key(username)=username_key(?)', (identifier, identifier)).fetchone()
         valid = check_password(password, row['password_hash'] if row else _DUMMY)
         if not row or not valid:
             raise APIError(401, 'E-mail, usuário ou senha incorretos.')
@@ -331,7 +353,7 @@ class Database:
         return dict(id=row['id'],displayName=row['display_name'],handle=row['username'],photo=row['photo'])
 
     def search_people(self, viewer_id, query):
-        query=text(query.lstrip('@') if isinstance(query,str) else query,2,80)
+        query=text(query.lstrip('@') if isinstance(query,str) else query,1,80)
         with self.connect() as db:
             normalized=db.execute('SELECT search_key(?)',(query,)).fetchone()[0]
             literal=normalized.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
@@ -527,9 +549,7 @@ class Database:
         value = data.get('value')
         if not isinstance(value, dict):
             raise APIError(400, 'Perfil inválido.')
-        name, handle = text(value.get('displayName'), 2, 50), text(value.get('handle'), 3, 24).lower()
-        if not re.fullmatch(r'[a-z0-9._]{3,24}', handle):
-            raise APIError(400, 'Nome de usuário inválido.')
+        name, handle = text(value.get('displayName'), 2, 50), clean_username(value.get('handle'))
         photo = value.get('photo', '')
         if not isinstance(photo, str) or len(photo) > 200_000 or (photo and not re.fullmatch(r'data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+', photo)):
             raise APIError(400, 'Foto inválida. Escolha uma imagem menor.')
@@ -544,10 +564,12 @@ class Database:
         if not isinstance(favorites, list) or len(favorites) > 6 or not isinstance(pinned, list) or len(pinned) > 100:
             raise APIError(400, 'Favoritas ou fixações inválidas.')
         with self.transaction() as db:
-            current = db.execute('SELECT profile_version,is_private FROM users WHERE id=?', (user_id,)).fetchone()
+            current = db.execute('SELECT profile_version,is_private,username FROM users WHERE id=?', (user_id,)).fetchone()
             version=current['profile_version']
             if data.get('version') != version:
                 raise APIError(409, 'Seu perfil mudou em outro dispositivo. Atualizamos os dados; tente novamente.')
+            if handle != current['username'] and db.execute('SELECT 1 FROM users WHERE id<>? AND (username_key(username)=username_key(?) OR username_key(email)=username_key(?))', (user_id,handle,handle)).fetchone():
+                raise APIError(409, 'Esse nome de usuário já está em uso. Escolha outro para continuar.')
             private=value.get('isPrivate',bool(current['is_private']))
             if type(private) is not bool:raise APIError(400,'Privacidade do perfil inválida.')
             favorite_ids = list(dict.fromkeys(self.store_track(db, item) for item in favorites))

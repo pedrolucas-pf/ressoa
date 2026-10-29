@@ -1,4 +1,5 @@
 import { api, getAccount } from './session.js';
+import { normalizeUsername } from './username.js';
 
 export const personHref=id=>id==='me'||id===getAccount().user.id?'#perfil':`#pessoa/${encodeURIComponent(id)}`;
 
@@ -7,7 +8,7 @@ export function createPeopleSearch(root) {
   const list=root.querySelector('#people-results'),status=root.querySelector('#people-search-status'),clear=root.querySelector('#clear-people-search');
   const toggle=root.querySelector('#toggle-people-search');
   let timer,request,generation=0,active=-1;
-  const query=()=>input.value.trim().replace(/^@/,'');
+  const query=()=>normalizeUsername(input.value);
   function close(collapse=false) {
     clearTimeout(timer);request?.abort();generation++;
     panel.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');input.removeAttribute('aria-busy');active=-1;
@@ -22,7 +23,7 @@ export function createPeopleSearch(root) {
     list.children[active].scrollIntoView({block:'nearest'});
   }
   async function search() {
-    const term=query();if(term.length<2)return;
+    const term=query();if(!term)return;
     const token=++generation;request?.abort();request=new AbortController();
     input.setAttribute('aria-busy','true');list.replaceChildren();status.textContent='Buscando…';open();
     try {
@@ -47,10 +48,9 @@ export function createPeopleSearch(root) {
   }
   input.addEventListener('input',()=>{
     close();list.replaceChildren();status.textContent='';clear.hidden=!input.value;
-    if(query().length>=2)timer=setTimeout(search,250);
-    else if(query().length){status.textContent='Digite pelo menos 2 caracteres.';open();}
+    if(query())timer=setTimeout(search,250);
   });
-  input.addEventListener('focus',()=>{if(query().length>=2&&(list.children.length||status.textContent))open();});
+  input.addEventListener('focus',()=>{if(query()&&(list.children.length||status.textContent))open();});
   input.addEventListener('keydown',event=>{
     if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close(true);if(toggle.getClientRects().length)toggle.focus();}
     if(!panel.hidden&&list.children.length&&['ArrowDown','ArrowUp','Enter'].includes(event.key)){
