@@ -133,6 +133,35 @@ const peopleSearch=createPeopleSearch($('#people-search'));
 const viewport = $('#story-viewport');
 const mobileStoryFeed = matchMedia('(max-width: 640px)');
 viewport.tabIndex = 0;
+let storySnapTarget=null,storySnapTimer,storySnapFrame;
+function storyScrollTop(index) {
+  const story=$('#story-track').children[index];
+  if(!story)return 0;
+  const top=story.getBoundingClientRect().top-viewport.getBoundingClientRect().top+viewport.scrollTop-viewport.clientTop;
+  return Math.max(0,Math.min(top,viewport.scrollHeight-viewport.clientHeight));
+}
+function cancelStorySnap() {
+  clearTimeout(storySnapTimer);cancelAnimationFrame(storySnapFrame);
+  if(storySnapTarget)viewport.scrollTo({top:viewport.scrollTop,behavior:'instant'});
+  storySnapTarget=null;viewport.style.removeProperty('scroll-snap-type');
+}
+function finishStorySnap() {
+  const target=storySnapTarget;
+  if(!target)return;
+  clearTimeout(storySnapTimer);storySnapTarget=null;
+  if(mobileStoryFeed.matches&&stories[target.index]?.id===target.id){
+    viewport.scrollTo({top:storyScrollTop(target.index),behavior:'instant'});
+  }
+  storySnapFrame=requestAnimationFrame(()=>{if(!storySnapTarget)viewport.style.removeProperty('scroll-snap-type');});
+}
+function scrollToStory(index,smooth=false) {
+  clearTimeout(storySnapTimer);cancelAnimationFrame(storySnapFrame);
+  storySnapTarget={index,id:stories[index]?.id};
+  // Avoid a second browser snap into the middle of an oversized weekly card.
+  viewport.style.scrollSnapType='none';
+  viewport.scrollTo({top:storyScrollTop(index),behavior:smooth?'smooth':'instant'});
+  storySnapTimer=setTimeout(finishStorySnap,160);
+}
 function resizeStoryViewport() {
   viewport.setAttribute('aria-label',mobileStoryFeed.matches?'Publicações. Deslize para cima ou para baixo para navegar.':'Publicações. Use as setas para navegar.');
   if(!mobileStoryFeed.matches){viewport.style.removeProperty('--mobile-feed-height');return;}
@@ -140,15 +169,16 @@ function resizeStoryViewport() {
   const height=Math.max(220,Math.floor(innerHeight-viewport.getBoundingClientRect().top-scrollY));
   if(viewport.style.getPropertyValue('--mobile-feed-height')!==`${height}px`){
     viewport.style.setProperty('--mobile-feed-height',`${height}px`);
-    viewport.scrollTop=storyIndex*height;
+    scrollToStory(storySnapTarget?.index??storyIndex);
   }
 }
 function positionStory(fromScroll=false) {
   if(mobileStoryFeed.matches){
     $('#story-track').style.removeProperty('transform');
     resizeStoryViewport();
-    if(!fromScroll)viewport.scrollTop=storyIndex*viewport.clientHeight;
+    if(!fromScroll)scrollToStory(storyIndex);
   }else{
+    cancelStorySnap();
     viewport.scrollTop=0;
     $('#story-track').style.transform=`translateX(-${storyIndex*100}%)`;
   }
@@ -341,26 +371,40 @@ async function toggleSave(id) {
 // Desktop keeps the horizontal carousel; mobile uses native vertical scroll snapping.
 let pointerStart = null;
 let lastGesture = 0;
-let scrollFrame, mobileTouch = null, lastWheelAt = 0, wheelStartedAtEnd = false;
-const atFeedEnd=()=>stories.length>0&&storyIndex===stories.length-1&&viewport.scrollTop>=viewport.scrollHeight-viewport.clientHeight-3;
+let scrollFrame, swipeFrame, mobileTouch = null, lastWheelAt = 0, wheelStartedAtEnd = false;
+const atFeedEnd=()=>stories.length>0&&storyIndex===stories.length-1&&viewport.scrollTop>=storyScrollTop(stories.length-1)-3;
 viewport.addEventListener('scroll',()=>{
   if(!mobileStoryFeed.matches||page!=='foryou'||document.querySelector('dialog[open]'))return;
+  if(storySnapTarget){clearTimeout(storySnapTimer);storySnapTimer=setTimeout(finishStorySnap,160);}
   cancelAnimationFrame(scrollFrame);
   scrollFrame=requestAnimationFrame(()=>{
     if(!mobileStoryFeed.matches||!viewport.clientHeight||feedRefreshJob)return;
-    const index=Math.max(0,Math.min(stories.length-1,Math.round(viewport.scrollTop/viewport.clientHeight)));
+    let index=storyIndex,distance=Infinity;
+    for(let i=0;i<stories.length;i++){
+      const delta=Math.abs(viewport.scrollTop-storyScrollTop(i));
+      if(delta<distance){distance=delta;index=i;}
+    }
     if(index!==storyIndex){lastGesture=Date.now();moveStory(index,true,true);}
   });
 },{passive:true});
 viewport.addEventListener('touchstart',event=>{
-  mobileTouch=mobileStoryFeed.matches&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,atEnd:atFeedEnd()}:null;
+  cancelAnimationFrame(swipeFrame);
+  cancelStorySnap();
+  mobileTouch=mobileStoryFeed.matches&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,index:storyIndex,atEnd:atFeedEnd()}:null;
 },{passive:true});
 viewport.addEventListener('touchend',event=>{
   const start=mobileTouch;mobileTouch=null;
   if(!start||!mobileStoryFeed.matches||event.touches.length||!event.changedTouches.length)return;
   const dx=event.changedTouches[0].clientX-start.x,dy=event.changedTouches[0].clientY-start.y;
   if(Math.abs(dy)>15)lastGesture=Date.now();
-  if(start.atEnd&&atFeedEnd()&&dy<-55&&Math.abs(dy)>Math.abs(dx)*1.5&&!window.getSelection()?.toString())void refreshFeedBatch(true);
+  if(Math.abs(dy)<=55||Math.abs(dy)<=Math.abs(dx)*1.5||window.getSelection()?.toString())return;
+  const target=start.index+(dy<0?1:-1);
+  if(target>=stories.length){if(start.atEnd&&atFeedEnd())void refreshFeedBatch(true);return;}
+  const index=Math.max(0,target),id=stories[index]?.id;
+  swipeFrame=requestAnimationFrame(()=>{
+    if(!mobileStoryFeed.matches||page!=='foryou'||stories[index]?.id!==id||document.querySelector('dialog[open]'))return;
+    scrollToStory(index,!matchMedia('(prefers-reduced-motion: reduce)').matches);
+  });
 },{passive:true});
 viewport.addEventListener('touchcancel',()=>{mobileTouch=null;},{passive:true});
 mobileStoryFeed.addEventListener('change',()=>{pointerStart=null;mobileTouch=null;positionStory();scheduleTextLayout();});
