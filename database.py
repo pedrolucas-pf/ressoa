@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import re
 import secrets
 import sqlite3
@@ -121,7 +122,7 @@ CREATE TABLE IF NOT EXISTS posts (
  id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  track_id TEXT NOT NULL REFERENCES tracks(id), text TEXT NOT NULL, visibility TEXT NOT NULL,
  kind TEXT NOT NULL DEFAULT 'entry', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- lyric_excerpt TEXT NOT NULL DEFAULT '', feed_published_at TEXT NOT NULL DEFAULT ''
+ lyric_excerpt TEXT NOT NULL DEFAULT '', feed_published_at TEXT NOT NULL DEFAULT '', audio_excerpt TEXT
 );
 CREATE INDEX IF NOT EXISTS posts_owner ON posts(owner_id, kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS posts_public ON posts(visibility, created_at DESC);
@@ -142,6 +143,17 @@ CREATE TABLE IF NOT EXISTS follow_notifications (
 );
 CREATE INDEX IF NOT EXISTS follow_notifications_recent ON follow_notifications(user_id,created_at DESC,actor_id DESC);
 CREATE INDEX IF NOT EXISTS follow_notifications_unread ON follow_notifications(user_id) WHERE read_at IS NULL;
+CREATE TABLE IF NOT EXISTS interaction_notifications (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK(kind IN ('like','repost')),
+ created_at TEXT NOT NULL, read_at TEXT, PRIMARY KEY(user_id,actor_id,post_id,kind)
+);
+CREATE INDEX IF NOT EXISTS interaction_notifications_recent ON interaction_notifications(user_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS comments (
+ id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+ author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id,created_at,id);
 CREATE TABLE IF NOT EXISTS actions (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
  kind TEXT NOT NULL CHECK(kind IN ('like','repost','saved')), PRIMARY KEY(user_id, post_id, kind)
@@ -154,7 +166,7 @@ CREATE TABLE IF NOT EXISTS shares (
  method TEXT NOT NULL CHECK(method IN ('native','link')), updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,post_id)
 );
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 """
 
 
@@ -186,7 +198,7 @@ class Database:
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript(SCHEMA)
-            for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('users','notifications_version','INTEGER NOT NULL DEFAULT 0'),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''")):
+            for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('users','notifications_version','INTEGER NOT NULL DEFAULT 0'),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''"),('posts','audio_excerpt','TEXT')):
                 if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
             self._migrate_username_case(db)
@@ -231,6 +243,15 @@ class Database:
         if len(value.splitlines())>3:
             raise APIError(400,'Escolha até 3 versos para o trecho.')
         return value
+
+    @staticmethod
+    def clean_audio_excerpt(value):
+        if value is None:return None
+        if not isinstance(value,dict):raise APIError(400,'Trecho de áudio inválido.')
+        start,end=value.get('start'),value.get('end')
+        if any(type(n) not in (int,float) or not math.isfinite(n) for n in (start,end)) or not 0<=start<end<=30 or end-start<1:
+            raise APIError(400,'Escolha pelo menos 1 segundo dentro da prévia de 30 segundos.')
+        return dict(start=round(start,2),end=round(end,2))
 
     @staticmethod
     def can_view_profile(db,viewer_id,target_id):
@@ -495,7 +516,7 @@ class Database:
         week_end=(datetime.fromisoformat(current_week()).replace(tzinfo=timezone(timedelta(hours=-3)))+timedelta(days=7)).astimezone(timezone.utc).isoformat() if row['kind']=='weekly' else None
         return dict(id=row['id'], ownerId=row['owner_id'], author=owner['display_name'], handle=owner['username'], photo=owner['photo'],
                     initials=owner['display_name'][:2].upper(), track=self.track(db, row['track_id']), text=row['text'], visibility=row['visibility'],
-                    kind=row['kind'], createdAt=row['created_at'], updatedAt=row['updated_at'],publishedAt=published,feedExpiresAt=week_end,lyricExcerpt=row['lyric_excerpt'],authorPrivate=bool(owner['is_private']))
+                    kind=row['kind'], createdAt=row['created_at'], updatedAt=row['updated_at'],publishedAt=published,feedExpiresAt=week_end,lyricExcerpt=row['lyric_excerpt'],audioExcerpt=json.loads(row['audio_excerpt']) if row['audio_excerpt'] else None,authorPrivate=bool(owner['is_private']))
 
     def accessible(self, db, user_id, post_id, public=False):
         visibility = " AND p.visibility='public'" if public else ''
@@ -559,8 +580,9 @@ class Database:
             recent=f"{published_time}>CAST(? AS timestamptz)" if self.is_postgres else f"{published_time}>julianday(?)"
             cutoff=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()
             queries = [
-                ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers
-                    FROM users WHERE id=?''', (self.notification_cutoff(),user_id)),
+                ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
+                    (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_interactions
+                    FROM users WHERE id=?''', (self.notification_cutoff(),self.notification_cutoff(),user_id)),
                 ("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)),
                 (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
@@ -603,7 +625,7 @@ class Database:
                         social=dict(following=[row['id'] for row in following],requested=requested, reposts=[row['post_id'] for row in actions if row['kind'] == 'repost'], likes={row['post_id']: ['me'] for row in actions if row['kind'] == 'like'}, seen=json.loads(user['seen'])),
                         followingPeople=[dict(id=row['id'], displayName=row['display_name'], handle=row['username'], photo=row['photo']) for row in following],
                         followersPeople=[self.person(row) for row in followers],followRequests=requests,
-                        notifications=dict(version=user['notifications_version'],unreadFollowers=user['unread_followers'],requestCount=len(requests),unreadCount=user['unread_followers']+len(requests)),
+                        notifications=dict(version=user['notifications_version'],unreadFollowers=user['unread_followers'],unreadInteractions=user['unread_interactions'],requestCount=len(requests),unreadCount=user['unread_followers']+user['unread_interactions']+len(requests)),
                         draft=json.loads(user['draft']), importedAt=user['imported_at'], serverWeek=current_week(), versions=dict(entries=user['entries_version'], profile=user['profile_version']))
 
     def save_entries(self, user_id, data):
@@ -639,10 +661,13 @@ class Database:
                 if not existing or existing['track_id'] != track_id:
                     self.store_track(db, track)
                 excerpt=self.clean_excerpt(item.get('lyricExcerpt',existing['lyric_excerpt'] if existing and existing['track_id']==track_id else ''))
+                audio=self.clean_audio_excerpt(item.get('audioExcerpt',json.loads(existing['audio_excerpt']) if existing and existing['track_id']==track_id and existing['audio_excerpt'] else None))
+                if audio and track['provider']!='deezer':raise APIError(400,'A seleção de áudio está disponível nas prévias Deezer.')
+                audio_json=json.dumps(audio) if audio else None
                 visibility = item.get('visibility')
                 if visibility not in ('public', 'private'):
                     raise APIError(400, 'Visibilidade inválida.')
-                changed = not existing or any(existing[key] != value for key, value in [('track_id',track_id),('text',message),('visibility',visibility),('lyric_excerpt',excerpt)])
+                changed = not existing or any(existing[key] != value for key, value in [('track_id',track_id),('text',message),('visibility',visibility),('lyric_excerpt',excerpt),('audio_excerpt',audio_json)])
                 timestamp = now_iso() if changed else existing['updated_at']
                 if post_id==republish_id and (not existing or visibility!='public'):
                     raise APIError(400,'Só é possível republicar uma entrada existente do perfil.')
@@ -652,9 +677,10 @@ class Database:
                     continue
                 published=now_iso() if not existing or (visibility=='public' and existing['visibility']=='private') else existing['feed_published_at']
                 if post_id==republish_id:published=now_iso()
-                db.execute("INSERT INTO posts (id,owner_id,track_id,text,visibility,kind,created_at,updated_at,lyric_excerpt,feed_published_at) VALUES (?,?,?,?,?,'entry',?,?,?,?) ON CONFLICT(id) DO UPDATE SET track_id=excluded.track_id,text=excluded.text,visibility=excluded.visibility,updated_at=excluded.updated_at,lyric_excerpt=excluded.lyric_excerpt,feed_published_at=excluded.feed_published_at", (post_id, user_id, track_id, message, visibility, existing['created_at'] if existing else timestamp, timestamp,excerpt,published))
+                db.execute("INSERT INTO posts (id,owner_id,track_id,text,visibility,kind,created_at,updated_at,lyric_excerpt,feed_published_at,audio_excerpt) VALUES (?,?,?,?,?,'entry',?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET track_id=excluded.track_id,text=excluded.text,visibility=excluded.visibility,updated_at=excluded.updated_at,lyric_excerpt=excluded.lyric_excerpt,feed_published_at=excluded.feed_published_at,audio_excerpt=excluded.audio_excerpt", (post_id, user_id, track_id, message, visibility, existing['created_at'] if existing else timestamp, timestamp,excerpt,published,audio_json))
                 if existing and changed:
                     db.execute("DELETE FROM actions WHERE post_id=? AND kind IN ('like','repost')",(post_id,))
+                    if db.execute('DELETE FROM interaction_notifications WHERE post_id=? RETURNING actor_id',(post_id,)).fetchall():self.bump_notifications(db,user_id)
                     db.execute('DELETE FROM shares WHERE post_id=?',(post_id,))
                 if visibility == 'private':
                     db.execute('DELETE FROM actions WHERE post_id=? AND user_id<>?', (post_id, user_id))
@@ -662,6 +688,7 @@ class Database:
                 raise APIError(400,'O Ressoa para republicar não está nesta edição.')
             for identifier in previous.keys() - ids:
                 db.execute('DELETE FROM posts WHERE id=?', (identifier,))
+            if previous.keys()-ids:self.bump_notifications(db,user_id)
             pinned = json.loads(user['pinned'])
             public_ids = {item['id'] for item in items if item.get('visibility') == 'public'}
             clean_pins = [key for key in pinned if key in public_ids]
@@ -721,8 +748,10 @@ class Database:
                 raise APIError(409, 'Você já usou a escolha desta semana. Uma nova será liberada na próxima segunda-feira.')
             track_id, message = self.store_track(db, data.get('track')), text(data.get('text', ''), 0, 2400)
             excerpt=self.clean_excerpt(data.get('lyricExcerpt',''))
+            audio=self.clean_audio_excerpt(data.get('audioExcerpt'))
+            if audio and data['track'].get('provider')!='deezer':raise APIError(400,'A seleção de áudio está disponível nas prévias Deezer.')
             identifier, timestamp = str(uuid.uuid4()), now_iso()
-            db.execute("INSERT INTO posts (id,owner_id,track_id,text,visibility,kind,created_at,updated_at,lyric_excerpt) VALUES (?,?,?,?,'public','weekly',?,?,?)", (identifier, user_id, track_id, message, timestamp, timestamp,excerpt))
+            db.execute("INSERT INTO posts (id,owner_id,track_id,text,visibility,kind,created_at,updated_at,lyric_excerpt,audio_excerpt) VALUES (?,?,?,?,'public','weekly',?,?,?,?)", (identifier, user_id, track_id, message, timestamp, timestamp,excerpt,json.dumps(audio) if audio else None))
             db.execute('INSERT INTO weekly VALUES (?,?,?,?,NULL)', (user_id, current_week(), identifier, timestamp))
 
     def delete_weekly(self, user_id):
@@ -731,6 +760,7 @@ class Database:
             if row:
                 db.execute('UPDATE weekly SET deleted_at=? WHERE user_id=? AND week_key=?', (now_iso(), user_id, current_week()))
                 db.execute('DELETE FROM posts WHERE id=? AND owner_id=?', (row['post_id'], user_id))
+                self.bump_notifications(db,user_id)
 
     def action(self, user_id, kind, target, active):
         if type(active) is not bool or not isinstance(target, str):
@@ -762,9 +792,15 @@ class Database:
             if kind == 'repost' and post['owner_id'] == user_id:
                 raise APIError(400, 'Essa ressoa já está no seu perfil.')
             if active:
-                db.execute('INSERT INTO actions VALUES (?,?,?) ON CONFLICT DO NOTHING', (user_id, target, kind))
+                inserted=db.execute('INSERT INTO actions VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING user_id', (user_id, target, kind)).fetchone()
+                if inserted and kind in ('like','repost') and post['owner_id']!=user_id:
+                    db.execute('''INSERT INTO interaction_notifications VALUES (?,?,?,?,?,NULL) ON CONFLICT(user_id,actor_id,post_id,kind)
+                        DO UPDATE SET created_at=excluded.created_at,read_at=NULL''',(post['owner_id'],user_id,target,kind,now_iso()))
+                    self.bump_notifications(db,post['owner_id'])
             else:
                 db.execute('DELETE FROM actions WHERE user_id=? AND post_id=? AND kind=?', (user_id, target, kind))
+                if kind in ('like','repost') and db.execute('DELETE FROM interaction_notifications WHERE user_id=? AND actor_id=? AND post_id=? AND kind=? RETURNING actor_id',(post['owner_id'],user_id,target,kind)).fetchone():
+                    self.bump_notifications(db,post['owner_id'])
             return dict(action=dict(kind=kind,target=target,active=active),post=self.post(db,post))
 
     def follow_requests(self, db, user_id):
@@ -818,76 +854,93 @@ class Database:
         return (datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
 
     @staticmethod
-    def notification_item(kind,person,timestamp,unread=False):
+    def notification_item(kind,person,timestamp,unread=False,post_id='',title=''):
         return dict(kind=kind,person=person,createdAt=timestamp,unread=unread,
-            expiresAt=(datetime.fromisoformat(timestamp)+timedelta(days=7)).isoformat() if kind=='follow' else None)
+            expiresAt=(datetime.fromisoformat(timestamp)+timedelta(days=7)).isoformat() if kind!='request' else None,postId=post_id,trackTitle=title)
 
     @staticmethod
     def notification_summary_query(user_id):
         return ('''SELECT notifications_version AS version,
             (SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
-            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(Database.notification_cutoff(),user_id,))
+            (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_interactions,
+            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(Database.notification_cutoff(),Database.notification_cutoff(),user_id,))
 
     @staticmethod
     def notification_summary(row):
-        return dict(version=row['version'],unreadFollowers=row['unread_followers'],requestCount=row['request_count'],unreadCount=row['unread_followers']+row['request_count'])
+        return dict(version=row['version'],unreadFollowers=row['unread_followers'],unreadInteractions=row['unread_interactions'],requestCount=row['request_count'],unreadCount=row['unread_followers']+row['unread_interactions']+row['request_count'])
 
     def notifications(self,user_id,cursor='',summary_only=False):
-        parameters=[user_id,user_id,self.notification_cutoff()]
+        parameters=[user_id,user_id,self.notification_cutoff(),user_id,self.notification_cutoff()]
         restriction=''
         if cursor:
             try:
                 if not isinstance(cursor,str) or len(cursor)>600 or not re.fullmatch(r'[A-Za-z0-9_-]+',cursor):raise ValueError()
                 values=json.loads(base64.urlsafe_b64decode(cursor+'='*(-len(cursor)%4)).decode())
-                if not isinstance(values,list) or len(values)!=3 or any(not isinstance(item,str) for item in values):raise ValueError()
-                stamp,kind,actor=values
-                if len(stamp)>50 or kind not in ('follow','request') or not 1<=len(actor)<=100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
+                if not isinstance(values,list) or len(values) not in (3,4) or any(not isinstance(item,str) for item in values):raise ValueError()
+                if len(values)==3:values.append('')
+                stamp,kind,actor,post_id=values
+                if len(stamp)>50 or kind not in ('follow','request','like','repost') or not 1<=len(actor)<=100 or len(post_id)>100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
             except (ValueError,UnicodeError,TypeError):
                 raise APIError(400,'A lista mudou. Reabra as notificações.') from None
-            restriction='WHERE (i.created_at,i.kind,i.actor_id)<(?,?,?)'
+            restriction='WHERE (i.created_at,i.kind,i.actor_id,i.post_id)<(?,?,?,?)'
             parameters.extend(values)
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
             queries=[self.notification_summary_query(user_id)]
             if not summary_only:
                 queries.append((f'''WITH items AS (
-                    SELECT 'request' AS kind,user_id AS actor_id,created_at,NULL AS read_at FROM follow_requests WHERE target_id=?
-                    UNION ALL SELECT 'follow',actor_id,created_at,read_at FROM follow_notifications WHERE user_id=? AND created_at>?)
-                    SELECT i.kind,i.created_at,i.read_at,u.id,u.display_name,u.username,u.photo,u.is_private
-                    FROM items i JOIN users u ON u.id=i.actor_id {restriction}
-                    ORDER BY i.created_at DESC,i.kind DESC,i.actor_id DESC LIMIT 51''',tuple(parameters)))
+                    SELECT 'request' AS kind,user_id AS actor_id,created_at,NULL AS read_at,'' AS post_id FROM follow_requests WHERE target_id=?
+                    UNION ALL SELECT 'follow',actor_id,created_at,read_at,'' FROM follow_notifications WHERE user_id=? AND created_at>?
+                    UNION ALL SELECT kind,actor_id,created_at,read_at,post_id FROM interaction_notifications WHERE user_id=? AND created_at>?)
+                    SELECT i.kind,i.created_at,i.read_at,i.post_id,u.id,u.display_name,u.username,u.photo,u.is_private,t.data AS track_data
+                    FROM items i JOIN users u ON u.id=i.actor_id LEFT JOIN posts p ON p.id=i.post_id LEFT JOIN tracks t ON t.id=p.track_id {restriction}
+                    ORDER BY i.created_at DESC,i.kind DESC,i.actor_id DESC,i.post_id DESC LIMIT 51''',tuple(parameters)))
             results=db.fetch_many(queries)
             summary=self.notification_summary(results[0][0])
             if summary_only:return dict(summary=summary)
             rows=results[1];items=[]
             for row in rows[:50]:
-                items.append(self.notification_item(row['kind'],dict(self.person(row),isPrivate=bool(row['is_private'])),row['created_at'],row['kind']=='follow' and row['read_at'] is None))
+                items.append(self.notification_item(row['kind'],dict(self.person(row),isPrivate=bool(row['is_private'])),row['created_at'],row['kind']!='request' and row['read_at'] is None,row['post_id'],json.loads(row['track_data']).get('title','') if row['track_data'] else ''))
             next_cursor=None
             if len(rows)>50:
-                last=rows[49];payload=[last['created_at'],last['kind'],last['id']]
+                last=rows[49];payload=[last['created_at'],last['kind'],last['id'],last['post_id']]
                 next_cursor=base64.urlsafe_b64encode(json.dumps(payload,separators=(',',':')).encode()).decode().rstrip('=')
             return dict(summary=summary,items=items,nextCursor=next_cursor)
 
     def read_notifications(self,user_id,data):
         items=data.get('items')
         if not isinstance(items,list) or len(items)>50:raise APIError(400,'Notificações inválidas.')
-        keys=[]
+        keys=[];interactions=[]
         for item in items:
             if not isinstance(item,dict):raise APIError(400,'Notificações inválidas.')
-            keys.extend((text(item.get('actorId'),1,100),text(item.get('createdAt'),1,50)))
-        if keys:
-            values=','.join('(?,?)' for _ in items)
+            actor,stamp=text(item.get('actorId'),1,100),text(item.get('createdAt'),1,50)
+            kind=item.get('kind','follow')
+            if kind=='follow':keys.extend((actor,stamp))
+            elif kind in ('like','repost'):interactions.extend((actor,stamp,kind,text(item.get('postId'),1,100)))
+            else:raise APIError(400,'Notificação inválida.')
+        if keys or interactions:
             with self.transaction() as db:
-                changed=db.execute(f'''UPDATE follow_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
-                    AND (actor_id,created_at) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*keys)).fetchall()
+                changed=[]
+                if keys:
+                    values=','.join('(?,?)' for _ in range(len(keys)//2))
+                    changed+=db.execute(f'''UPDATE follow_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
+                        AND (actor_id,created_at) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*keys)).fetchall()
+                if interactions:
+                    values=','.join('(?,?,?,?)' for _ in range(len(interactions)//4))
+                    changed+=db.execute(f'''UPDATE interaction_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
+                        AND (actor_id,created_at,kind,post_id) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*interactions)).fetchall()
                 if changed:self.bump_notifications(db,user_id)
         return self.notifications(user_id,summary_only=True)
 
     def dismiss_notification(self,user_id,data):
         actor=text(data.get('actorId'),1,100)
         timestamp=text(data.get('createdAt'),1,50)
+        kind=data.get('kind','follow')
+        if kind not in ('follow','like','repost'):raise APIError(400,'Notificação inválida.')
         with self.transaction() as db:
-            if db.execute('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? AND created_at=? RETURNING actor_id',(user_id,actor,timestamp)).fetchone():
+            if kind=='follow':removed=db.execute('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? AND created_at=? RETURNING actor_id',(user_id,actor,timestamp)).fetchone()
+            else:removed=db.execute('DELETE FROM interaction_notifications WHERE user_id=? AND actor_id=? AND created_at=? AND kind=? AND post_id=? RETURNING actor_id',(user_id,actor,timestamp,kind,text(data.get('postId'),1,100))).fetchone()
+            if removed:
                 self.bump_notifications(db,user_id)
             return dict(summary=self.notification_summary(db.execute(*self.notification_summary_query(user_id)).fetchone()))
 
@@ -903,6 +956,55 @@ class Database:
                 ELSE 'none' END AS status FROM users u WHERE u.id IN ({placeholders})''',(user_id,user_id,*targets)).fetchall()
             people={row['id']:dict(person=self.person(row),status=row['status']) for row in rows}
             return dict(people=[people.get(target,dict(person=dict(id=target),status='none')) for target in targets])
+
+    def comments(self,user_id,post_id,cursor=''):
+        post_id=text(post_id,1,100)
+        params=[post_id];restriction=''
+        if cursor:
+            try:
+                if not isinstance(cursor,str) or len(cursor)>500 or not re.fullmatch(r'[A-Za-z0-9_-]+',cursor):raise ValueError()
+                values=json.loads(base64.urlsafe_b64decode(cursor+'='*(-len(cursor)%4)).decode())
+                if not isinstance(values,list) or len(values)!=2:raise ValueError()
+                stamp,identifier=values
+                if not isinstance(stamp,str) or len(stamp)>50 or not datetime.fromisoformat(stamp).tzinfo or not isinstance(identifier,str) or not 1<=len(identifier)<=100:raise ValueError()
+            except (ValueError,TypeError,UnicodeError):raise APIError(400,'Reabra os comentários.') from None
+            restriction='AND (c.created_at,c.id)>(?,?)';params.extend((stamp,identifier))
+        with self.connect() as db:
+            db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
+            post=self.accessible(db,user_id,post_id)
+            rows,total=db.fetch_many([
+                (f'''SELECT c.*,u.display_name,u.username,u.photo FROM comments c JOIN users u ON u.id=c.author_id
+                    WHERE c.post_id=? {restriction} ORDER BY c.created_at,c.id LIMIT 31''',tuple(params)),
+                ('SELECT COUNT(*) AS total FROM comments WHERE post_id=?',(post_id,))])
+            more=None
+            if len(rows)>30:more=base64.urlsafe_b64encode(json.dumps([rows[29]['created_at'],rows[29]['id']]).encode()).decode().rstrip('=')
+            return dict(comments=[self.comment_item(row,user_id,post['owner_id']) for row in rows[:30]],nextCursor=more,total=total[0]['total'])
+
+    def comment_item(self,row,user_id,owner_id):
+        return dict(id=row['id'],text=row['body'],createdAt=row['created_at'],
+            person=dict(id=row['author_id'],displayName=row['display_name'],handle=row['username'],photo=row['photo']),canDelete=user_id in (row['author_id'],owner_id))
+
+    def add_comment(self,user_id,data):
+        post_id=text(data.get('postId'),1,100);body=text(data.get('text'),1,1000);identifier=text(data.get('id'),1,100)
+        if not re.fullmatch(r'[A-Za-z0-9_-]+',identifier):raise APIError(400,'Comentário inválido.')
+        with self.transaction() as db:
+            post=self.accessible(db,user_id,post_id)
+            existing=db.execute('SELECT * FROM comments WHERE id=?',(identifier,)).fetchone()
+            if existing and (existing['author_id']!=user_id or existing['post_id']!=post_id or existing['body']!=body):raise APIError(409,'Esse comentário mudou. Tente novamente.')
+            if not existing:db.execute('INSERT INTO comments VALUES (?,?,?,?,?)',(identifier,post_id,user_id,body,now_iso()))
+            rows,total=db.fetch_many([
+                ('SELECT c.*,u.display_name,u.username,u.photo FROM comments c JOIN users u ON u.id=c.author_id WHERE c.id=?',(identifier,)),
+                ('SELECT COUNT(*) AS total FROM comments WHERE post_id=?',(post_id,))])
+            return dict(comment=self.comment_item(rows[0],user_id,post['owner_id']),total=total[0]['total'])
+
+    def delete_comment(self,user_id,data):
+        identifier=text(data.get('id'),1,100);post_id=text(data.get('postId'),1,100)
+        with self.transaction() as db:
+            post=self.accessible(db,user_id,post_id)
+            row=db.execute('SELECT author_id FROM comments WHERE id=? AND post_id=?',(identifier,post_id)).fetchone()
+            if row and user_id not in (row['author_id'],post['owner_id']):raise APIError(403,'Você só pode apagar seus comentários ou os comentários dos seus Ressoas.')
+            if row:db.execute('DELETE FROM comments WHERE id=?',(identifier,))
+            return dict(ok=True,total=db.execute('SELECT COUNT(*) FROM comments WHERE post_id=?',(post_id,)).fetchone()[0])
 
     def likes(self, user_id, post_id):
         with self.connect() as db:
@@ -955,7 +1057,7 @@ class Database:
                 track = clean_track(value['track']) if value.get('track') else None
                 if track:
                     self.store_track(db, track)
-                clean = dict(text=message, track=track, visibility='public' if value.get('visibility') == 'public' else 'private',lyricExcerpt=self.clean_excerpt(value.get('lyricExcerpt','')))
+                clean = dict(text=message, track=track, visibility='public' if value.get('visibility') == 'public' else 'private',lyricExcerpt=self.clean_excerpt(value.get('lyricExcerpt','')),audioExcerpt=self.clean_audio_excerpt(value.get('audioExcerpt')))
                 db.execute('UPDATE users SET draft=? WHERE id=?', (json.dumps(clean), user_id))
         elif key == 'seen':
             clean = self.clean_seen(value)

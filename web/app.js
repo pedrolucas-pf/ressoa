@@ -12,6 +12,8 @@ import { createLyricPicker } from './lyric-picker.js';
 import { ensureTrackDetails, durationLabel, trackSummary } from './track-context.js';
 import { createPeopleSearch, personHref } from './people-search.js';
 import { createNotifications } from './notifications.js';
+import { createComments } from './comments.js';
+import { createAudioExcerpt } from './audio-excerpt.js';
 import { bindUsernameValidation, normalizeUsername, usernameError } from './username.js';
 import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, actionPending, hydratePublicProfile, hydratePost } from './session.js';
 
@@ -116,8 +118,8 @@ function spotifyBrand(track) {
 function trackArt(track, size = 400, excerpt = '') {
   return `<button class="cover-open" data-music="${track}" aria-label="Sobre ${escape(tracks[track].title)}${excerpt?' · Trecho: '+escape(excerpt):''}">${albumArt({artwork:cover(track),album:tracks[track].album||tracks[track].title,excerpt,size})}</button>`;
 }
-const coverPlay = track => `<button class="cover-play" data-play="${track}" aria-label="Ouvir trecho" aria-pressed="false"><span aria-hidden="true">▶</span></button>`;
-const playableArt = (track,size,excerpt) => `<div class="cover-stage">${trackArt(track,size,excerpt)}${coverPlay(track)}</div>`;
+const coverPlay = (track,post=null) => `<button class="cover-play" data-play="${track}" ${post?`data-play-post="${escape(post.id)}"`:''} aria-label="Ouvir trecho" aria-pressed="false"><span aria-hidden="true">▶</span></button>`;
+const playableArt = (track,size,excerpt,post=null) => `<div class="cover-stage">${trackArt(track,size,excerpt)}${coverPlay(track,post)}</div>`;
 const publicPostLabel=()=>profileInfo.isPrivate?'Seguidores':'Pública';
 document.addEventListener('error', event => {
   const image = event.target;
@@ -131,7 +133,6 @@ $('#people-search-icon').innerHTML=icons.search;
 $('#notifications-button').firstElementChild.innerHTML=svg('<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-5m4-1v8m-4-4h8"/>');
 const peopleSearch=createPeopleSearch($('#people-search'));
 const viewport = $('#story-viewport');
-const mobileStoryFeed = matchMedia('(max-width: 640px)');
 viewport.tabIndex = 0;
 let storySnapTarget=null,storySnapTimer,storySnapFrame;
 function storyScrollTop(index) {
@@ -149,7 +150,7 @@ function finishStorySnap() {
   const target=storySnapTarget;
   if(!target)return;
   clearTimeout(storySnapTimer);storySnapTarget=null;
-  if(mobileStoryFeed.matches&&stories[target.index]?.id===target.id){
+  if(stories[target.index]?.id===target.id){
     viewport.scrollTo({top:storyScrollTop(target.index),behavior:'instant'});
   }
   storySnapFrame=requestAnimationFrame(()=>{if(!storySnapTarget)viewport.style.removeProperty('scroll-snap-type');});
@@ -163,25 +164,18 @@ function scrollToStory(index,smooth=false) {
   storySnapTimer=setTimeout(finishStorySnap,160);
 }
 function resizeStoryViewport() {
-  viewport.setAttribute('aria-label',mobileStoryFeed.matches?'Publicações. Deslize para cima ou para baixo para navegar.':'Publicações. Use as setas para navegar.');
-  if(!mobileStoryFeed.matches){viewport.style.removeProperty('--mobile-feed-height');return;}
+  viewport.setAttribute('aria-label','Role para cima ou para baixo para navegar.');
   if(!viewport.getClientRects().length)return;
   const height=Math.max(220,Math.floor(innerHeight-viewport.getBoundingClientRect().top-scrollY));
-  if(viewport.style.getPropertyValue('--mobile-feed-height')!==`${height}px`){
-    viewport.style.setProperty('--mobile-feed-height',`${height}px`);
+  if(viewport.style.getPropertyValue('--feed-height')!==`${height}px`){
+    viewport.style.setProperty('--feed-height',`${height}px`);
     scrollToStory(storySnapTarget?.index??storyIndex);
   }
 }
 function positionStory(fromScroll=false) {
-  if(mobileStoryFeed.matches){
-    $('#story-track').style.removeProperty('transform');
-    resizeStoryViewport();
-    if(!fromScroll)scrollToStory(storyIndex);
-  }else{
-    cancelStorySnap();
-    viewport.scrollTop=0;
-    $('#story-track').style.transform=`translateX(-${storyIndex*100}%)`;
-  }
+  $('#story-track').style.removeProperty('transform');
+  resizeStoryViewport();
+  if(!fromScroll)scrollToStory(storyIndex);
 }
 
 function authorMarkup(post) {
@@ -198,7 +192,7 @@ function saveButton(post) {
 function storyMarkup(post) {
   const track = tracks[post.track];
   return `<article class="story${post.featured ? ' featured' : ''}" data-id="${escape(post.id)}" aria-label="${escape(track.title)}">
-    <div class="story-art">${playableArt(post.track,undefined,post.lyricExcerpt)}<h2 class="track-title"><button class="track-name" data-music="${post.track}">${escape(track.title)}</button></h2><p class="artist">${escape(track.artist)}</p>${spotifyBrand(post.track)}</div>
+    <div class="story-art">${playableArt(post.track,undefined,post.lyricExcerpt,post)}<h2 class="track-title"><button class="track-name" data-music="${post.track}">${escape(track.title)}</button></h2><p class="artist">${escape(track.artist)}</p>${spotifyBrand(post.track)}</div>
     <div class="story-writing"><div class="story-top"><span class="story-weekly-label">Ressoa da semana</span><div class="story-label">${authorMarkup({...post,date:post.feedDate||post.date})}${followButton(post)}</div></div><div class="reflection-wrap"><div class="reflection-preview"><p class="reflection${post.text?'':' no-comment'}">${escape(previewText(post))}</p><button class="text-button read-more" data-read="${escape(post.id)}" hidden>Ler mais</button></div></div><div class="story-actions">${socialButtons(post)}${saveButton(post)}</div></div>
   </article>`;
 }
@@ -370,8 +364,7 @@ async function toggleSave(id) {
   if (stored) toast(existed ? 'Removida das guardadas.' : 'Ressoa guardada.');
 }
 
-// Desktop keeps the horizontal carousel; mobile uses native vertical scroll snapping.
-let pointerStart = null;
+// Native vertical scrolling is shared by all devices.
 let lastGesture = 0;
 let scrollFrame, swipeCorrection=null,swipeCorrectionTimer,mobileTouch=null,lastWheelAt=0,wheelStartedAtEnd=false,wheelStartedAtStart=false;
 const atFeedEnd=()=>stories.length>0&&storyIndex===stories.length-1&&viewport.scrollTop>=storyScrollTop(stories.length-1)-3;
@@ -382,19 +375,19 @@ function clearPullIndicator() {
 function clearSwipeCorrection(){clearTimeout(swipeCorrectionTimer);swipeCorrection=null;}
 function finishSwipeCorrection(){
   const swipe=swipeCorrection;swipeCorrection=null;
-  if(!swipe||!mobileStoryFeed.matches||page!=='foryou'||feedRefreshJob||stories[swipe.index]?.id!==swipe.id||document.querySelector('dialog[open]'))return;
+  if(!swipe||page!=='foryou'||feedRefreshJob||stories[swipe.index]?.id!==swipe.id||document.querySelector('dialog[open]'))return;
   // Let native momentum finish; only help when a weekly card traps the gesture.
   if(storyIndex===swipe.from||(storyIndex===swipe.index&&Math.abs(viewport.scrollTop-storyScrollTop(swipe.index))>3)){
     scrollToStory(swipe.index,!matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
 }
 viewport.addEventListener('scroll',()=>{
-  if(!mobileStoryFeed.matches||page!=='foryou'||document.querySelector('dialog[open]'))return;
+  if(page!=='foryou'||document.querySelector('dialog[open]'))return;
   if(storySnapTarget){clearTimeout(storySnapTimer);storySnapTimer=setTimeout(finishStorySnap,160);}
   if(swipeCorrection){clearTimeout(swipeCorrectionTimer);swipeCorrectionTimer=setTimeout(finishSwipeCorrection,110);}
   cancelAnimationFrame(scrollFrame);
   scrollFrame=requestAnimationFrame(()=>{
-    if(!mobileStoryFeed.matches||!viewport.clientHeight||feedRefreshJob)return;
+    if(!viewport.clientHeight||feedRefreshJob)return;
     let index=storyIndex,distance=Infinity;
     for(let i=0;i<stories.length;i++){
       const delta=Math.abs(viewport.scrollTop-storyScrollTop(i));
@@ -405,7 +398,7 @@ viewport.addEventListener('scroll',()=>{
 },{passive:true});
 viewport.addEventListener('touchstart',event=>{
   clearSwipeCorrection();clearPullIndicator();cancelStorySnap();
-  mobileTouch=mobileStoryFeed.matches&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,index:storyIndex,atStart:atFeedStart(),atEnd:atFeedEnd()}:null;
+  mobileTouch=event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,index:storyIndex,atStart:atFeedStart(),atEnd:atFeedEnd()}:null;
 },{passive:true});
 viewport.addEventListener('touchmove',event=>{
   if(!mobileTouch?.atStart||event.touches.length!==1||feedRefreshJob)return;
@@ -415,7 +408,7 @@ viewport.addEventListener('touchmove',event=>{
 },{passive:true});
 viewport.addEventListener('touchend',event=>{
   const start=mobileTouch;mobileTouch=null;clearPullIndicator();
-  if(!start||!mobileStoryFeed.matches||event.touches.length||!event.changedTouches.length)return;
+  if(!start||event.touches.length||!event.changedTouches.length)return;
   const dx=event.changedTouches[0].clientX-start.x,dy=event.changedTouches[0].clientY-start.y;
   if(Math.abs(dy)>15)lastGesture=Date.now();
   if(Math.abs(dy)<=55||Math.abs(dy)<=Math.abs(dx)*1.5||window.getSelection()?.toString())return;
@@ -428,56 +421,25 @@ viewport.addEventListener('touchend',event=>{
   }
 },{passive:true});
 viewport.addEventListener('touchcancel',()=>{mobileTouch=null;clearPullIndicator();},{passive:true});
-mobileStoryFeed.addEventListener('change',()=>{pointerStart=null;mobileTouch=null;clearSwipeCorrection();clearPullIndicator();positionStory();scheduleTextLayout();});
 window.addEventListener('resize',scheduleTextLayout);
 textObserver.observe($('.header'));
-viewport.addEventListener('pointerdown', event => {
-  if(mobileStoryFeed.matches)return;
-  const control = event.target.closest('button, a, input, select, textarea');
-  if (event.button !== 0 || !event.isPrimary || (control && !control.matches('[data-music]'))) return;
-  pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId };
-});
-viewport.addEventListener('pointerup', event => {
-  if(mobileStoryFeed.matches){pointerStart=null;return;}
-  if (!pointerStart || pointerStart.id !== event.pointerId) return;
-  const dx = event.clientX - pointerStart.x;
-  const dy = event.clientY - pointerStart.y;
-  pointerStart = null;
-  if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.5 && !window.getSelection()?.toString()) {
-    moveStory(storyIndex + (dx < 0 ? 1 : -1));
-    lastGesture = Date.now();
-  } else if (Math.abs(dy) > 15) lastGesture = Date.now();
-});
-viewport.addEventListener('pointercancel', () => pointerStart = null);
 viewport.addEventListener('click', event => {
-  const more=event.target.closest('.read-more');if(more){openPost(more.dataset.read);return;}
-  if(mobileStoryFeed.matches)return;
-  if (Date.now() - lastGesture < 450 || window.getSelection()?.toString() || event.target.closest('button, a, input, select, textarea')) return;
-  const bounds = viewport.getBoundingClientRect();
-  moveStory(storyIndex + (event.clientX < bounds.left + bounds.width * .25 ? -1 : 1));
+ const more=event.target.closest('.read-more');if(more)openPost(more.dataset.read);
 });
 viewport.addEventListener('wheel', event => {
-  if(mobileStoryFeed.matches){
-    const now=Date.now();
-    if(now-lastWheelAt>250){wheelStartedAtEnd=atFeedEnd();wheelStartedAtStart=atFeedStart();}
-    lastWheelAt=now;
-    if(wheelStartedAtEnd&&atFeedEnd()&&event.deltaY>40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
-      event.preventDefault();wheelStartedAtEnd=false;lastGesture=now;void refreshFeedBatch(true);
-    }else if(wheelStartedAtStart&&atFeedStart()&&event.deltaY<-40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
-      event.preventDefault();wheelStartedAtStart=false;lastGesture=now;void refreshFeedBatch();
-    }
-    return;
-  }
-  const horizontal = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
-  if (Math.abs(horizontal) < 15 || (!event.shiftKey && Math.abs(event.deltaY) > Math.abs(horizontal))) return;
-  event.preventDefault();
-  if (Date.now() - lastGesture < 450) return;
-  moveStory(storyIndex + (horizontal > 0 ? 1 : -1));
-  lastGesture = Date.now();
+ const now=Date.now();
+ if(now-lastWheelAt>250){wheelStartedAtEnd=atFeedEnd();wheelStartedAtStart=atFeedStart();}
+ lastWheelAt=now;
+ if(wheelStartedAtEnd&&atFeedEnd()&&event.deltaY>40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
+  event.preventDefault();wheelStartedAtEnd=false;lastGesture=now;void refreshFeedBatch(true);
+ }else if(wheelStartedAtStart&&atFeedStart()&&event.deltaY<-40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
+  event.preventDefault();wheelStartedAtStart=false;lastGesture=now;void refreshFeedBatch();
+ }
 }, { passive: false });
+
 document.addEventListener('keydown', event => {
   if (page !== 'foryou' || document.querySelector('dialog[open]') || event.target.closest('input, select, textarea, [contenteditable="true"]') || event.altKey || event.ctrlKey || event.metaKey) return;
-  const vertical=mobileStoryFeed.matches&&['ArrowDown','ArrowUp','PageDown','PageUp'].includes(event.key);
+  const vertical=['ArrowDown','ArrowUp','PageDown','PageUp'].includes(event.key);
   if (event.key === 'ArrowRight' || event.key === 'ArrowLeft' || vertical) {
     event.preventDefault();
     moveStory(storyIndex + (['ArrowRight','ArrowDown','PageDown'].includes(event.key) ? 1 : -1));
@@ -489,11 +451,11 @@ function diaryMarkup(post, {reposted=false,pinned=false,inProfile=false}={}) {
   const track=tracks[post.track];
   const authorId=isMine(post)?getAccount().user.id:post.ownerId,photo=isMine(post)?profileInfo.photo:post.photo;
   const badge=reposted?`<a class="repost-badge person-link" href="${escape(personHref(authorId))}" data-person="${escape(authorId)}" aria-label="Repost de ${escape(authorHandle(post))}" title="Repost de ${escape(authorHandle(post))}"><span aria-hidden="true">↻</span><span class="avatar" aria-hidden="true">${photo?`<img src="${escape(photo)}" alt="">`:escape(post.initials||authorName(post).slice(0,2).toUpperCase())}</span><span class="repost-name">${escape(authorHandle(post))}</span></a>`:'';
-  return `<article class="diary-post diary-card${reposted?' repost-card':''}" data-id="${escape(post.id)}">${pinned?'<span class="pin-label">Fixada</span>':''}${badge}<button class="diary-card-open" data-read="${escape(post.id)}" aria-label="Abrir ressoa: ${escape(track.title)}">${albumArt({artwork:cover(post.track),album:track.album||track.title,excerpt:post.lyricExcerpt,size:250,lazy:true})}<div class="diary-card-copy"><h2 class="track-title">${escape(track.title)}</h2><p class="artist">${escape(track.artist)}</p><p class="reflection${inProfile&&!post.text?' no-comment':''}">${escape(inProfile?previewText(post):post.text)}</p><p class="privacy">${isMine(post)?post.visibility==='private'?'Só você':publicPostLabel():escape(authorHandle(post))} · ${escape(post.date||'agora')}</p></div></button>${coverPlay(post.track)}</article>`;
+  return `<article class="diary-post diary-card${reposted?' repost-card':''}" data-id="${escape(post.id)}">${pinned?'<span class="pin-label">Fixada</span>':''}${badge}<button class="diary-card-open" data-read="${escape(post.id)}" aria-label="Abrir ressoa: ${escape(track.title)}">${albumArt({artwork:cover(post.track),album:track.album||track.title,excerpt:post.lyricExcerpt,size:250,lazy:true})}<div class="diary-card-copy"><h2 class="track-title">${escape(track.title)}</h2><p class="artist">${escape(track.artist)}</p><p class="reflection${inProfile&&!post.text?' no-comment':''}">${escape(inProfile?previewText(post):post.text)}</p><p class="privacy">${isMine(post)?post.visibility==='private'?'Só você':publicPostLabel():escape(authorHandle(post))} · ${escape(post.date||'agora')}</p></div></button>${coverPlay(post.track,post)}</article>`;
 }
 function renderDiary() {
  const featured=myWeeklyPost();
- $('#weekly-selection').innerHTML=featured?`<div class="weekly-preview">${playableArt(featured.track,48,featured.lyricExcerpt)}<div><p>${escape(tracks[featured.track].title)}</p>${spotifyBrand(featured.track)}</div></div>`:'<span class="muted">'+(weeklyLocked()?'Destaque apagado':'Não definida')+'</span>';
+ $('#weekly-selection').innerHTML=featured?`<div class="weekly-preview">${playableArt(featured.track,48,featured.lyricExcerpt,featured)}<div><p>${escape(tracks[featured.track].title)}</p>${spotifyBrand(featured.track)}</div></div>`:'<span class="muted">'+(weeklyLocked()?'Destaque apagado':'Não definida')+'</span>';
  $('#define-weekly').textContent=weeklyLocked()?'Escolha usada':'Definir';$('#define-weekly').disabled=weeklyLocked();$('#delete-weekly').hidden=!featured;
  $('#weekly-lock-note').textContent=weeklyLocked()?`Nova escolha em ${nextWeekLabel()}, à 0h de Brasília.`:'Uma escolha por semana · independente do diário.';
  document.querySelectorAll('[data-collection]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.collection===collection)));
@@ -566,7 +528,7 @@ async function openLinkedPost(id) {
 function openPost(id,post=allPosts().find(value=>value.id===id)) {
  if(!post)return;stopPreview();readerId=id;
  const track=tracks[post.track],own=isMine(post),pub=post.visibility!=='private';
- $('#reader-content').innerHTML=`<div class="reader-cover">${playableArt(post.track,140,post.lyricExcerpt)}</div><h2 id="reader-title">${escape(track.title)}</h2><p class="artist">${escape(track.artist)}</p>${spotifyBrand(post.track)}<div class="reader-author">${authorMarkup(post)}</div><p class="reader-text" ${post.text?'':'hidden'}>${escape(post.text)}</p><div class="reader-social">${pub?socialButtons(post):''}${saveButton(post)}</div><div class="post-commands">${own&&post.kind!=='weekly'?`<button class="text-button" data-edit="${escape(id)}">Editar</button><button class="text-button" data-delete="${escape(id)}">Apagar</button>`:''}${own&&post.kind==='weekly'?'<button class="text-button" data-delete-weekly>Apagar destaque</button>':''}${own&&pub?`<button class="text-button" data-interactions="${escape(id)}">Curtidas e reposts</button>`:''}${own&&pub&&post.kind!=='weekly'?`<button class="text-button" data-feature="${escape(id)}" ${weeklyLocked()?'disabled':''}>Usar música na semana</button><button class="text-button" data-reader-pin="${escape(id)}">${profileInfo.pinned.includes(id)?'Desafixar':'Fixar no perfil'}</button>`:''}</div>`;
+ $('#reader-content').innerHTML=`<div class="reader-cover">${playableArt(post.track,140,post.lyricExcerpt,post)}</div><h2 id="reader-title">${escape(track.title)}</h2><p class="artist">${escape(track.artist)}</p>${spotifyBrand(post.track)}<div class="reader-author">${authorMarkup(post)}</div><p class="reader-text" ${post.text?'':'hidden'}>${escape(post.text)}</p><div class="reader-social">${pub?socialButtons(post):''}${saveButton(post)}</div><div class="post-commands">${own&&post.kind!=='weekly'?`<button class="text-button" data-edit="${escape(id)}">Editar</button><button class="text-button" data-delete="${escape(id)}">Apagar</button>`:''}${own&&post.kind==='weekly'?'<button class="text-button" data-delete-weekly>Apagar destaque</button>':''}${own&&pub?`<button class="text-button" data-interactions="${escape(id)}">Curtidas e reposts</button>`:''}${own&&pub&&post.kind!=='weekly'?`<button class="text-button" data-feature="${escape(id)}" ${weeklyLocked()?'disabled':''}>Usar música na semana</button><button class="text-button" data-reader-pin="${escape(id)}">${profileInfo.pinned.includes(id)?'Desafixar':'Fixar no perfil'}</button>`:''}</div>`;
  if(!$('#reader').open)$('#reader').showModal();
 }
 $('#reader').addEventListener('close',()=>{
@@ -586,12 +548,12 @@ document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('c
 function setWeekly(id) {
  if(weeklyLocked()){toast(`Sua próxima escolha será em ${nextWeekLabel()}.`);return false;}
  const source=entries.find(post=>post.id===id);if(!source)return false;
- $('#reader').close();$('#define-weekly').click();weeklyPicker.setSelection(source.track,false);renderExcerptChoice('weekly');$('#weekly-form').elements.reflection.value='';$('#weekly-form').elements.reflection.focus();return true;
+ $('#reader').close();$('#define-weekly').click();weeklyPicker.setSelection(source.track,false);weeklyAudio.set(source.track);renderExcerptChoice('weekly');$('#weekly-form').elements.reflection.value='';$('#weekly-form').elements.reflection.focus();return true;
 }
 
 $('#define-weekly').addEventListener('click', () => {
   if (weeklyLocked()) return;
-  weeklyPicker.reset(); $('#weekly-form').reset();renderExcerptChoice('weekly');
+  weeklyPicker.reset(); $('#weekly-form').reset();weeklyAudio.set(null);renderExcerptChoice('weekly');
   $('#weekly-dialog').showModal();
 });
 $('#weekly-form').addEventListener('submit', async event => {
@@ -600,7 +562,7 @@ $('#weekly-form').addEventListener('submit', async event => {
   if (weeklyLocked()) { toast(`Sua próxima escolha será em ${nextWeekLabel()}.`); return; }
   if (!weeklyPicker.requireSelection()) return;
   const text = event.currentTarget.elements.reflection.value.trim();
-  const entry = makeEntry(weeklyPicker.value, text, 'public',event.currentTarget.elements.lyricExcerpt.value);
+  const entry = makeEntry(weeklyPicker.value, text, 'public',event.currentTarget.elements.lyricExcerpt.value,weeklyAudio.value);
   savingWeekly=true;
   const stored=await saveNewEntry(entry,true);savingWeekly=false;
   if(!stored)return;
@@ -611,10 +573,13 @@ const form = $('#entry-form');
 const pickerOptions = { onPreview: mountPreview, onStop: stopPreview, onError: toast };
 const composerPicker = createTrackPicker($('#composer-track-picker'), { ...pickerOptions, onChange:index=>trackChanged('entry',index) });
 const weeklyPicker = createTrackPicker($('#weekly-track-picker'), {...pickerOptions,onChange:index=>trackChanged('weekly',index)});
+const entryAudio=createAudioExcerpt({host:$('#entry-audio-choice'),musicDetails,stopPreview,onChange:persistDraft});
+const weeklyAudio=createAudioExcerpt({host:$('#weekly-audio-choice'),musicDetails,stopPreview});
 const lyricPicker=createLyricPicker({dialog:$('#lyric-picker'),api,tracks,musicDetails,onSelect(scope,value){
  const target=scope==='weekly'?$('#weekly-form'):form;target.elements.lyricExcerpt.value=value;renderExcerptChoice(scope);if(scope==='entry')persistDraft();
 }});
 function trackChanged(scope,index) {
+ (scope==='weekly'?weeklyAudio:entryAudio).set(index);
  const target=scope==='weekly'?$('#weekly-form'):form;target.elements.lyricExcerpt.value='';renderExcerptChoice(scope,index);if(scope==='entry')persistDraft();
 }
 function renderExcerptChoice(scope,index) {
@@ -633,12 +598,13 @@ document.addEventListener('click',event=>{
 
 function openComposer(id = null) {
  stopPreview(); const existing=id?entries.find(post=>post.id===id):null;if(id&&!existing)return;
- editingId=existing?.id||null;const draft=existing?{text:existing.text,track:existing.track,visibility:existing.visibility,lyricExcerpt:existing.lyricExcerpt}:read('ressoa.draft',{});
+ editingId=existing?.id||null;const draft=existing?{text:existing.text,track:existing.track,visibility:existing.visibility,lyricExcerpt:existing.lyricExcerpt,audioExcerpt:existing.audioExcerpt}:read('ressoa.draft',{});
  form.reset();composerPicker.reset();form.elements.reflection.setCustomValidity('');
  if(typeof draft?.text==='string')form.elements.reflection.value=draft.text;
  if(Number.isInteger(draft?.track)&&tracks[draft.track])composerPicker.setSelection(draft.track,false);
  if(draft?.visibility==='public')form.elements.visibility.value='public';
  form.elements.lyricExcerpt.value=draft?.lyricExcerpt||'';renderExcerptChoice('entry');
+ entryAudio.set(composerPicker.value,draft?.audioExcerpt||null);
  $('#composer-title').textContent=editingId?'Editar ressoa':'Escrever uma ressoa';$('#entry-form [type="submit"]').textContent=editingId?'Salvar alterações':'Salvar ressoa';$('#composer').showModal();
 }
 
@@ -647,7 +613,7 @@ function persistDraft() {
   if (editingId) return;
   clearTimeout(draftTimer);
   draftTimer = setTimeout(() => {
-    write('ressoa.draft', { text: form.elements.reflection.value, track: composerPicker.value, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value });
+    write('ressoa.draft', { text: form.elements.reflection.value, track: composerPicker.value, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value });
   }, 800);
 }
 $('#write-entry').addEventListener('click', () => openComposer());
@@ -669,16 +635,16 @@ form.addEventListener('submit', async event => {
   if (editingId) {
     const existing = entries.find(post => post.id === editingId);
     if (!existing) { toast('Esta ressoa não está mais disponível.'); return; }
-    entry = { ...existing, track: composerPicker.value, text, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,updatedAt: new Date().toISOString() };
+    entry = { ...existing, track: composerPicker.value, text, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value,updatedAt: new Date().toISOString() };
     const updated = entries.map(post => post.id === editingId ? entry : post);
-    const changed=existing.track!==entry.track||existing.text!==entry.text||existing.visibility!==entry.visibility||(existing.lyricExcerpt||'')!==entry.lyricExcerpt;
+    const changed=existing.track!==entry.track||existing.text!==entry.text||existing.visibility!==entry.visibility||(existing.lyricExcerpt||'')!==entry.lyricExcerpt||JSON.stringify(existing.audioExcerpt||null)!==JSON.stringify(entry.audioExcerpt);
     let publishAgain=false;
     if(changed&&existing.visibility==='public'&&entry.visibility==='public'){
       publishAgain=await askEditPublication();if(publishAgain===null)return;
     }
     if (!await write('ressoa.entries', updated,true,{republish:publishAgain?entry.id:undefined})) return;
   } else {
-    entry = makeEntry(composerPicker.value, text, form.elements.visibility.value,form.elements.lyricExcerpt.value);
+    entry = makeEntry(composerPicker.value, text, form.elements.visibility.value,form.elements.lyricExcerpt.value,entryAudio.value);
     if (!await saveNewEntry(entry)) return;
   }
   const wasEditing = Boolean(editingId); editingId = null;
@@ -691,7 +657,7 @@ form.addEventListener('submit', async event => {
 });
 
 
-function makeEntry(track,text,visibility,lyricExcerpt='') {return{id:newId(),track,text,visibility,lyricExcerpt,ownerId:'me',author:'Você',initials:'P',createdAt:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})};}
+function makeEntry(track,text,visibility,lyricExcerpt='',audioExcerpt=null) {return{id:newId(),track,text,visibility,lyricExcerpt,audioExcerpt,ownerId:'me',author:'Você',initials:'P',createdAt:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})};}
 async function saveNewEntry(entry,feature=false) {
  if(feature){
   if(weeklyLocked()){toast(`Sua próxima escolha será em ${nextWeekLabel()}.`);return false;}
@@ -702,7 +668,7 @@ async function saveNewEntry(entry,feature=false) {
 }
 function mountStoryPreview() {
  if(page!=='foryou'||document.querySelector('dialog[open]'))return;
- const button=document.querySelector('.story[aria-hidden="false"] [data-play]');if(button)mountCoverPlayer(button,Number(button.dataset.play));
+ const button=document.querySelector('.story[aria-hidden="false"] [data-play]');if(button)mountCoverPlayer(button,Number(button.dataset.play),stories[storyIndex]?.audioExcerpt);
 }
 
 async function loadLyrics(index) {
@@ -769,8 +735,8 @@ document.addEventListener('click', event => {
   if (music && Date.now() - lastGesture >= 450) openMusic(Number(music.dataset.music));
 });
 $('#music-dialog').addEventListener('close', () => { musicGeneration++;musicIndex=null;lyricsRequest?.abort(); stopPreview(); $('#music-content').replaceChildren(); mountStoryPreview(); });
-$('#composer').addEventListener('close', () => { composerPicker.close(); stopPreview(); editingId = null; });
-$('#weekly-dialog').addEventListener('close', () => { weeklyPicker.close(); stopPreview(); });
+$('#composer').addEventListener('close', () => { composerPicker.close();entryAudio.stop(); stopPreview(); editingId = null; });
+$('#weekly-dialog').addEventListener('close', () => { weeklyPicker.close();weeklyAudio.stop(); stopPreview(); });
 
 let shortcutPhoto,shortcutName;
 function updateProfileShortcut(){
@@ -787,7 +753,7 @@ function weeklyFeatureMarkup(post) {
  const heading=own?title:`<button type="button" class="track-name weekly-title-open" data-read="${id}" aria-label="Abrir ressoa da semana: ${title}">${title}</button>`;
  const actions=own?'':`<div class="weekly-social" role="group" aria-label="Ações do ressoa da semana">${socialButtons(post)}${saveButton(post)}</div>`;
  const menu=own?`<details class="weekly-menu options-menu"><summary class="icon-button" aria-label="Opções do ressoa da semana" title="Opções do ressoa da semana"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg></summary><div class="weekly-menu-panel options-menu-panel" role="group" aria-label="Ações do seu destaque semanal"><button type="button" data-read="${id}">Abrir</button><button type="button" data-share="${id}">Compartilhar</button><button type="button" data-delete-weekly>Apagar</button></div></details>`:'';
- return `<section class="profile-weekly weekly-feature" style="--weekly-art:url(${escape(JSON.stringify(cover(post.track)))})"><span class="section-label">Ressoa da semana</span>${menu}<div class="weekly-feature-body"><div>${playableArt(post.track,220,post.lyricExcerpt)}${spotifyBrand(post.track)}</div><div>${own?authorMarkup(post):''}<h2 class="track-title">${heading}</h2><p class="weekly-reflection${post.text?'':' no-comment'}">${escape(previewText(post))}</p>${actions}</div></div></section>`;
+ return `<section class="profile-weekly weekly-feature" style="--weekly-art:url(${escape(JSON.stringify(cover(post.track)))})"><span class="section-label">Ressoa da semana</span>${menu}<div class="weekly-feature-body"><div>${playableArt(post.track,220,post.lyricExcerpt,post)}${spotifyBrand(post.track)}</div><div>${own?authorMarkup(post):''}<h2 class="track-title">${heading}</h2><p class="weekly-reflection${post.text?'':' no-comment'}">${escape(previewText(post))}</p>${actions}</div></div></section>`;
 }
 document.addEventListener('click',event=>{
  const chosen=event.target.closest('.options-menu-panel button');
@@ -967,9 +933,10 @@ function updatePrivacyUI() {
  $('#entry-form [value="public"]').textContent=profileInfo.isPrivate?'Seguidores':'Pública';
 }
 function socialButtons(post) {
- if(post.visibility==='private')return '';
+ const commentButton=`<button type="button" class="icon-button social-action" data-comments="${escape(post.id)}" aria-label="Ver comentários">${svg('<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/>')}</button>`;
+ if(post.visibility==='private')return commentButton;
  const liked=(social.likes[post.id]||[]).includes('me'),reposted=social.reposts.includes(post.id);
- return `<button class="icon-button social-action like-action" data-like="${escape(post.id)}" ${pendingAttributes('like',post.id)} aria-label="${liked?'Descurtir':'Curtir'} ressoa" aria-pressed="${liked}">${svg('<path d="M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z"/>')}</button>${!isMine(post)?`<button class="icon-button social-action" data-repost="${escape(post.id)}" ${pendingAttributes('repost',post.id)} aria-label="${reposted?'Remover repost':'Repostar ressoa'}" aria-pressed="${reposted}">${svg('<path d="m16 3 4 4-4 4M4 11V7h16M8 21l-4-4 4-4m12 0v4H4"/>')}</button>`:''}<button class="icon-button social-action" data-share="${escape(post.id)}" aria-label="Compartilhar ressoa">${svg('<path d="M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7"/>')}</button>`;
+ return `${commentButton}<button class="icon-button social-action like-action" data-like="${escape(post.id)}" ${pendingAttributes('like',post.id)} aria-label="${liked?'Descurtir':'Curtir'} ressoa" aria-pressed="${liked}">${svg('<path d="M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z"/>')}</button>${!isMine(post)?`<button class="icon-button social-action" data-repost="${escape(post.id)}" ${pendingAttributes('repost',post.id)} aria-label="${reposted?'Remover repost':'Repostar ressoa'}" aria-pressed="${reposted}">${svg('<path d="m16 3 4 4-4 4M4 11V7h16M8 21l-4-4 4-4m12 0v4H4"/>')}</button>`:''}<button class="icon-button social-action" data-share="${escape(post.id)}" aria-label="Compartilhar ressoa">${svg('<path d="M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7"/>')}</button>`;
 }
 function syncSocialButtons() {
  const markPending=(button,kind,target)=>{const waiting=actionPending(kind,target);button.disabled=waiting;if(waiting)button.setAttribute('aria-busy','true');else button.removeAttribute('aria-busy');};
@@ -1013,6 +980,8 @@ const showFollowers=target=>showRelations('followers',target);
 function peopleIdentity(person) {
  return `<a class="person-link person-identity" href="${escape(personHref(person.id))}" data-person="${escape(person.id)}">${profileAvatar(person.photo,person.displayName)}<span>${escape(person.displayName)}<small>@${escape(person.handle)}</small></span></a>`;
 }
+const comments=createComments({identity:peopleIdentity,toast,stopPreview});
+document.addEventListener('click',event=>{const button=event.target.closest('[data-comments]');if(button)comments.open(button.dataset.comments);});
 const notifications=createNotifications({
  identity:peopleIdentity,toast,
  onResponse:()=>{if(page==='perfil'&&!visitedId)renderProfile();},
@@ -1062,7 +1031,7 @@ $('#copy-share-link').addEventListener('click',async()=>{try{if(sharePost){await
 $('#share-dialog').addEventListener('close',()=>{shareGeneration++;shareFile=null;sharePost=null;clearSharePreview();});
 $('#profile-editor').addEventListener('close',()=>{backgroundPicker.close();favoritePickers.forEach(picker=>picker.close());stopPreview();});
 document.addEventListener('click',async event=>{
- const play=event.target.closest('[data-play]');if(play){toggleCoverPlayer(play,Number(play.dataset.play),event);return;}
+ const play=event.target.closest('[data-play]');if(play){const post=allPosts().find(item=>item.id===play.dataset.playPost);toggleCoverPlayer(play,Number(play.dataset.play),event,post?.audioExcerpt);return;}
  if(event.target.closest('[data-person]'))document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());
  const like=event.target.closest('[data-like]'),follow=event.target.closest('[data-follow]'),repost=event.target.closest('[data-repost]'),share=event.target.closest('[data-share]');
  const edit=event.target.closest('[data-edit]'),del=event.target.closest('[data-delete]'),feature=event.target.closest('[data-feature]'),pin=event.target.closest('[data-reader-pin]'),interactionList=event.target.closest('[data-interactions]');

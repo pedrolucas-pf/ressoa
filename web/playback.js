@@ -23,6 +23,7 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     button.classList.toggle('playing', playing);
   }
   function stopPreview() {
+    document.dispatchEvent(new Event('ressoaplaybackstop'));
     generation++;
     coverButton=null;coverToggle=null;
     if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); audio = null; }
@@ -32,10 +33,13 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     document.querySelectorAll('[data-play]').forEach(button => { state(button, false); button.removeAttribute('aria-busy'); });
     document.querySelector('#spotify-controller-host')?.replaceChildren();
   }
-  function nativeAudio(detail, button, inline = false, index) {
+  function nativeAudio(detail, button, inline = false, index, excerpt = null) {
     const player = document.createElement('audio'); player.preload = 'none'; player.volume = .5;
     if (detail.previewUrl) player.src = detail.previewUrl;
     audio = player;
+    const bounds=()=>({start:Math.min(excerpt?.start||0,Math.max(0,(player.duration||30)-1)),end:Math.min(excerpt?.end||30,player.duration||30)});
+    player.addEventListener('loadedmetadata',()=>{if(excerpt)player.currentTime=bounds().start;});
+    player.addEventListener('timeupdate',()=>{if(excerpt&&player.currentTime>=bounds().end-.04){player.pause();player.currentTime=bounds().start;}});
     const metadata=ensureTrackDetails(index).then(track=>{
       if(audio!==player)return;
       if(player.paused&&track?.previewUrl){const url=new URL(track.previewUrl);if(url.protocol==='https:'&&url.hostname.endsWith('.dzcdn.net'))player.src=url.href;}
@@ -46,7 +50,7 @@ export function createPlayback({ tracks, musicDetails, toast }) {
       if (!player.src) { button.setAttribute('aria-busy','true');await metadata;button.removeAttribute('aria-busy'); }
       if(audio!==player)return;
       if (!player.src) { toast('Prévia indisponível para esta gravação.'); return; }
-      try { if (player.paused) await player.play(); else player.pause(); }
+      try { if (player.paused) {if(excerpt&&(player.currentTime<bounds().start||player.currentTime>=bounds().end-.04))player.currentTime=bounds().start;await player.play();} else player.pause(); }
       catch { if (audio === player) toast('Não foi possível reproduzir o trecho.'); }
     };
     if(inline)button.onclick=toggle;else coverToggle=toggle;
@@ -55,12 +59,12 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     player.addEventListener('error', () => { if (audio === player) { state(button, false); toast('Prévia indisponível. Tente novamente.'); } });
     return player;
   }
-  async function mountCoverPlayer(button, index) {
+  async function mountCoverPlayer(button, index, excerpt = null) {
     if (!button || !musicDetails[index]) return;
     stopPreview(); const token = generation; const detail = musicDetails[index];
     coverButton=button;
     state(button, false);
-    if (detail.provider !== 'spotify') { nativeAudio(detail, button, false, index); return; }
+    if (detail.provider !== 'spotify') { nativeAudio(detail, button, false, index, excerpt); return; }
     let ready = false, queued = false;
     coverToggle = event => {
       event.stopPropagation();
@@ -82,8 +86,8 @@ export function createPlayback({ tracks, musicDetails, toast }) {
       if (token === generation) { button.removeAttribute('aria-busy'); coverToggle = () => toast('O Spotify não carregou. Abra a ficha para tentar o player completo.'); }
     }
   }
-  function toggleCoverPlayer(button,index,event) {
-    if(coverButton!==button)void mountCoverPlayer(button,index);
+  function toggleCoverPlayer(button,index,event,excerpt=null) {
+    if(coverButton!==button)void mountCoverPlayer(button,index,excerpt);
     coverToggle?.(event);
   }
   function mountPreview(host, index, height = 152) {

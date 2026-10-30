@@ -12,6 +12,7 @@
 </head>
 <body class="auth-open">
   <section id="auth-screen" class="auth-screen" aria-label="Entrar no Ressoa">
+    <div class="auth-hero">
     <div id="auth-covers" class="auth-covers" aria-hidden="true"></div>
     <div class="auth-shade"></div>
     <header class="auth-header"><div class="identity"><a class="brand" href="/" aria-label="Ressoa, início">ress<span class="brand-disc"><span class="sr-only">o</span></span>a</a><span class="slogan">o que a música te faz sentir</span></div></header>
@@ -42,7 +43,23 @@
         <p class="auth-footnote">Sua música. Sua história. Seu lugar.</p>
       </div>
     </div>
+    <a class="auth-discover" href="#como-funciona">Conheça o Ressoa <span aria-hidden="true">↓</span></a>
     <span class="auth-credit">Capas de álbuns · Deezer</span>
+    </div>
+    <section class="auth-about" id="como-funciona" aria-labelledby="about-title">
+      <span class="section-label">Como funciona</span>
+      <h2 id="about-title">Uma música pode guardar muita coisa.</h2>
+      <p class="about-lead">Escolha uma faixa e registre o que ela significa para você. Com palavras, um trecho da letra ou só a música.</p>
+      <div class="about-grid">
+        <article><span class="about-number">01</span><h3>Um perfil com a sua cara</h3><p>Escolha sua foto, bio, capa de fundo e músicas favoritas. Fixe os Ressoas que mais dizem sobre você.</p></article>
+        <article><span class="about-number">02</span><h3>O trecho certo</h3><p>Destaque versos sobre a capa e ouça prévias. Nas faixas disponíveis, escolha o início e o fim da prévia que acompanha seu Ressoa.</p></article>
+        <article><span class="about-number">03</span><h3>Você escolhe quem vê</h3><p>Guarde só no diário ou compartilhe. Com perfil privado, você decide quem pode seguir e ver suas publicações.</p></article>
+        <article><span class="about-number">04</span><h3>Músicas que encontram pessoas</h3><p>Role o For you, acompanhe quem você segue, curta, reposte e converse nos comentários.</p></article>
+        <article><span class="about-number">05</span><h3>Uma música para a semana</h3><p>Escolha o Ressoa da semana e dê destaque à faixa que representa seu momento, sem alterar seu diário.</p></article>
+        <article><span class="about-number">06</span><h3>Guarde e compartilhe</h3><p>Salve Ressoas para voltar depois. Baixe a imagem ou copie o link para compartilhar em outras redes.</p></article>
+      </div>
+      <div class="about-cta"><p>Qual música faz sentido para você hoje?</p><button type="button" class="button primary" id="about-register">Criar minha conta</button><a class="text-button" href="#auth-screen">Já tenho conta</a></div>
+    </section>
   </section>
   <div id="app-shell" hidden>
   <header class="header">
@@ -124,6 +141,7 @@
       </div>
       <div id="composer-track-picker" class="track-picker"></div>
       <input type="hidden" name="lyricExcerpt" value=""><div id="entry-excerpt-choice" class="excerpt-choice"></div>
+      <div id="entry-audio-choice"></div>
       <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="6" placeholder="Se quiser, escreva aqui"></textarea></label>
       <label>Visibilidade<select name="visibility"><option value="private">Só no meu diário</option><option value="public">Pública</option></select></label>
       <p class="form-note" id="visibility-note">Salvo na sua conta. Respeitamos a visibilidade que você escolher.</p>
@@ -138,6 +156,7 @@
     <form id="weekly-form">
       <div id="weekly-track-picker" class="track-picker"></div>
       <input type="hidden" name="lyricExcerpt" value=""><div id="weekly-excerpt-choice" class="excerpt-choice"></div>
+      <div id="weekly-audio-choice"></div>
       <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="4" placeholder="Se quiser, escreva aqui"></textarea></label>
       <p class="form-note">Uma escolha por semana.</p>
       <button class="button primary" type="submit">Definir</button>
@@ -177,6 +196,12 @@
   </dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-message" class="form-note"></p><div class="dialog-actions"><button class="button" data-close="confirm-dialog">Cancelar</button><button class="button primary" id="confirm-action">Apagar</button></div></dialog>
   <dialog id="people-dialog" aria-labelledby="people-title"><div class="dialog-heading"><h2 id="people-title">Curtidas e reposts</h2><button class="icon-button" data-close="people-dialog" aria-label="Fechar pessoas">×</button></div><div id="people-content"></div></dialog>
+  <dialog id="comments-dialog" aria-labelledby="comments-title">
+    <div class="dialog-heading"><h2 id="comments-title">Comentários</h2><button type="button" class="icon-button" data-close="comments-dialog" aria-label="Fechar comentários">×</button></div>
+    <div id="comments-list"></div><p id="comments-status" class="form-note" role="status"></p>
+    <button type="button" class="text-button" id="comments-more" hidden>Ver mais comentários</button><button type="button" class="text-button" id="comments-retry" hidden>Tentar novamente</button>
+    <form id="comment-form"><label for="comment-text">Seu comentário</label><textarea id="comment-text" name="comment" required maxlength="1000" rows="3" placeholder="O que essa música te faz pensar?"></textarea><button type="submit" class="button primary">Enviar</button></form>
+  </dialog>
   <dialog id="notifications-dialog" aria-labelledby="notifications-title">
     <div class="dialog-heading"><h2 id="notifications-title">Notificações</h2><button class="icon-button" data-close="notifications-dialog" aria-label="Fechar notificações">×</button></div>
     <div id="notification-content"></div>

@@ -67,6 +67,7 @@ function setMode(next, animate=true) {
 document.querySelectorAll('[data-auth-mode]').forEach(button => button.onclick = () => setMode(button.dataset.authMode));
 $('#forgot-password').onclick=()=>{setMode('forgot');form.elements.recoveryEmail.focus();};
 $('#back-to-login').onclick=()=>{resetToken='';setMode('login');form.elements.identifier.focus();};
+$('#about-register').onclick=()=>{setMode('register');$('#auth-screen').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});form.elements.displayName.focus({preventScroll:true});};
 form.elements.passwordConfirmation.addEventListener('input',()=>form.elements.passwordConfirmation.setCustomValidity(''));
 form.elements.password.addEventListener('input',()=>form.elements.passwordConfirmation.setCustomValidity(''));
 $('#toggle-password').onclick = () => {
@@ -81,6 +82,7 @@ async function enter(data) {
   $('#auth-screen').hidden = true;
   $('#app-shell').hidden = false;
   document.body.classList.remove('auth-open');
+  window.scrollTo({top:0,behavior:'instant'});
   window.dispatchEvent(new Event('accountentered'));
 }
 form.addEventListener('submit', async event => {

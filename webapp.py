@@ -239,6 +239,12 @@ class Application:
         if path == '/api/notifications' and method == 'GET':
             self.db.limit('notifications-read:'+user_id,90,60)
             return 200,self.db.notifications(user_id,value('cursor'),value('summary')=='1'),[]
+        if path == '/api/comments' and method == 'GET':
+            self.db.limit('comments-read:'+user_id,120,60)
+            return 200,self.db.comments(user_id,value('post'),value('cursor')),[]
+        if path == '/api/comments' and method in ('POST','DELETE'):
+            self.db.limit('comments-write:'+user_id,30,60)
+            return 200,(self.db.add_comment(user_id,data) if method=='POST' else self.db.delete_comment(user_id,data)),[]
         if path == '/api/notifications/read' and method == 'POST':
             self.db.limit('notifications-seen:'+user_id,120,60)
             return 200,self.db.read_notifications(user_id,data),[]

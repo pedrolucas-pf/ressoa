@@ -13,8 +13,8 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   let failedAppend = false;
   let checkingFollows = false;
   const processing = new Map();
-  const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt]);
-  const expired = item => item.kind === 'follow' && item.expiresAt && Date.parse(item.expiresAt) <= Date.now();
+  const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt, item.postId || '']);
+  const expired = item => item.kind !== 'request' && item.expiresAt && Date.parse(item.expiresAt) <= Date.now();
 
   function updateBadge() {
     const total = getAccount().notifications?.unreadCount || 0;
@@ -33,7 +33,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       const details = row.querySelector('.person-identity > span:last-child');
       const message = document.createElement('small');
       message.className = 'notification-message';
-      message.textContent = item.kind === 'request' ? 'Quer seguir você' : 'Começou a seguir você';
+      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa'})[item.kind];
       const time = document.createElement('time');
       time.dateTime = item.createdAt;
       time.textContent = new Date(item.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -47,7 +47,12 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
           action.textContent = label; action.dataset[attribute] = item.person.id;
           actions.append(action);
         }
-      } else actions.innerHTML = followButton(item.person);
+      } else if (item.kind === 'follow') actions.innerHTML = followButton(item.person);
+      else {
+        const link=document.createElement('a');link.className='text-button';
+        link.href='#ressoa/'+encodeURIComponent(item.postId);link.dataset.notificationPost=item.postId;
+        link.textContent=item.trackTitle||'Ver Ressoa';actions.append(link);
+      }
       row.append(actions);
       const dismiss = document.createElement('button');
       dismiss.type = 'button'; dismiss.className = 'icon-button notification-dismiss';
@@ -70,6 +75,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   }
 
   content.addEventListener('click', async event => {
+    if (event.target.closest('[data-notification-post]')) { dialog.close(); return; }
     const control = event.target.closest('[data-accept-request], [data-decline-request], [data-dismiss-notification]');
     if (!control) return;
     event.preventDefault(); event.stopPropagation();
@@ -86,7 +92,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
     try {
       const result = item.kind === 'request'
         ? await mutate('/api/follow-request', 'POST', { requester: item.person.id, accept, createdAt: item.createdAt, compact: true })
-        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt });
+        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId });
       if (owner !== getAccount().user.id) return;
       updateNotifications(result.summary, owner);
       items = items.filter(item => key(item) !== rowKey);
@@ -117,7 +123,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
     let succeeded = false;
     try {
       const { summary } = await api('/api/notifications/read', { method: 'POST', body: {
-        items: unread.map(item => ({ actorId: item.person.id, createdAt: item.createdAt }))
+        items: unread.map(item => ({ actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId }))
       } });
       if (owner !== getAccount().user.id) return;
       updateNotifications(summary, owner);
