@@ -936,7 +936,7 @@ function socialButtons(post) {
  const commentButton=`<button type="button" class="icon-button social-action" data-comments="${escape(post.id)}" aria-label="Ver comentários">${svg('<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/>')}</button>`;
  if(post.visibility==='private')return commentButton;
  const liked=(social.likes[post.id]||[]).includes('me'),reposted=social.reposts.includes(post.id);
- return `${commentButton}<button class="icon-button social-action like-action" data-like="${escape(post.id)}" ${pendingAttributes('like',post.id)} aria-label="${liked?'Descurtir':'Curtir'} ressoa" aria-pressed="${liked}">${svg('<path d="M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z"/>')}</button>${!isMine(post)?`<button class="icon-button social-action" data-repost="${escape(post.id)}" ${pendingAttributes('repost',post.id)} aria-label="${reposted?'Remover repost':'Repostar ressoa'}" aria-pressed="${reposted}">${svg('<path d="m16 3 4 4-4 4M4 11V7h16M8 21l-4-4 4-4m12 0v4H4"/>')}</button>`:''}<button class="icon-button social-action" data-share="${escape(post.id)}" aria-label="Compartilhar ressoa">${svg('<path d="M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7"/>')}</button>`;
+ return `<button class="icon-button social-action like-action" data-like="${escape(post.id)}" ${pendingAttributes('like',post.id)} aria-label="${liked?'Descurtir':'Curtir'} ressoa" aria-pressed="${liked}">${svg('<path d="M20.8 4.8a5.5 5.5 0 0 0-7.8 0L12 5.9l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.4a5.5 5.5 0 0 0 0-7.8Z"/>')}</button>${commentButton}${!isMine(post)?`<button class="icon-button social-action" data-repost="${escape(post.id)}" ${pendingAttributes('repost',post.id)} aria-label="${reposted?'Remover repost':'Repostar ressoa'}" aria-pressed="${reposted}">${svg('<path d="m16 3 4 4-4 4M4 11V7h16M8 21l-4-4 4-4m12 0v4H4"/>')}</button>`:''}<button class="icon-button social-action" data-share="${escape(post.id)}" aria-label="Compartilhar ressoa">${svg('<path d="M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7"/>')}</button>`;
 }
 function syncSocialButtons() {
  const markPending=(button,kind,target)=>{const waiting=actionPending(kind,target);button.disabled=waiting;if(waiting)button.setAttribute('aria-busy','true');else button.removeAttribute('aria-busy');};
@@ -984,6 +984,7 @@ const comments=createComments({identity:peopleIdentity,toast,stopPreview});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-comments]');if(button)comments.open(button.dataset.comments);});
 const notifications=createNotifications({
  identity:peopleIdentity,toast,
+ onComment:id=>comments.open(id),
  onResponse:()=>{if(page==='perfil'&&!visitedId)renderProfile();},
  onFollowChange:()=>{if(page==='perfil'&&visitedId)void loadVisitedProfile();else void refreshView();},
  followButton:person=>`<button type="button" class="button" data-follow-back data-follow="${escape(person.id)}" data-private="${Boolean(person.isPrivate)}" ${pendingAttributes('follow',person.id)} aria-pressed="${hasFollow(person.id)}">${hasFollow(person.id)?followLabel(person.id,person.isPrivate):'Seguir de volta'}</button>`

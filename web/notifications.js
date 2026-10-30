@@ -1,6 +1,6 @@
 import { api, getAccount, busy, mutate, updateNotifications, refreshPendingFollows } from './session.js';
 
-export function createNotifications({ identity, followButton, toast, onFollowChange, onResponse }) {
+export function createNotifications({ identity, followButton, toast, onFollowChange, onResponse, onComment }) {
   const button = document.getElementById('notifications-button');
   const count = document.getElementById('notification-count');
   const dialog = document.getElementById('notifications-dialog');
@@ -13,7 +13,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   let failedAppend = false;
   let checkingFollows = false;
   const processing = new Map();
-  const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt, item.postId || '']);
+  const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt, item.postId || '', item.commentId || '']);
   const expired = item => item.kind !== 'request' && item.expiresAt && Date.parse(item.expiresAt) <= Date.now();
 
   function updateBadge() {
@@ -33,7 +33,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       const details = row.querySelector('.person-identity > span:last-child');
       const message = document.createElement('small');
       message.className = 'notification-message';
-      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa'})[item.kind];
+      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa'})[item.kind];
       const time = document.createElement('time');
       time.dateTime = item.createdAt;
       time.textContent = new Date(item.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -51,6 +51,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       else {
         const link=document.createElement('a');link.className='text-button';
         link.href='#ressoa/'+encodeURIComponent(item.postId);link.dataset.notificationPost=item.postId;
+        if(item.kind==='comment')link.dataset.notificationComment='true';
         link.textContent=item.trackTitle||'Ver Ressoa';actions.append(link);
       }
       row.append(actions);
@@ -75,7 +76,8 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   }
 
   content.addEventListener('click', async event => {
-    if (event.target.closest('[data-notification-post]')) { dialog.close(); return; }
+    const postLink=event.target.closest('[data-notification-post]');
+    if (postLink) { dialog.close();if(postLink.hasAttribute('data-notification-comment')){event.preventDefault();onComment?.(postLink.dataset.notificationPost);}return; }
     const control = event.target.closest('[data-accept-request], [data-decline-request], [data-dismiss-notification]');
     if (!control) return;
     event.preventDefault(); event.stopPropagation();
@@ -92,7 +94,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
     try {
       const result = item.kind === 'request'
         ? await mutate('/api/follow-request', 'POST', { requester: item.person.id, accept, createdAt: item.createdAt, compact: true })
-        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId });
+        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId,commentId:item.commentId });
       if (owner !== getAccount().user.id) return;
       updateNotifications(result.summary, owner);
       items = items.filter(item => key(item) !== rowKey);
@@ -123,7 +125,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
     let succeeded = false;
     try {
       const { summary } = await api('/api/notifications/read', { method: 'POST', body: {
-        items: unread.map(item => ({ actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId }))
+        items: unread.map(item => ({ actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId,commentId:item.commentId }))
       } });
       if (owner !== getAccount().user.id) return;
       updateNotifications(summary, owner);

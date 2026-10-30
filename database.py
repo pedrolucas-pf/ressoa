@@ -154,6 +154,12 @@ CREATE TABLE IF NOT EXISTS comments (
  author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id,created_at,id);
+CREATE TABLE IF NOT EXISTS comment_notifications (
+ comment_id TEXT PRIMARY KEY REFERENCES comments(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, created_at TEXT NOT NULL, read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS comment_notifications_recent ON comment_notifications(user_id,created_at DESC,comment_id DESC);
 CREATE TABLE IF NOT EXISTS actions (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
  kind TEXT NOT NULL CHECK(kind IN ('like','repost','saved')), PRIMARY KEY(user_id, post_id, kind)
@@ -166,7 +172,7 @@ CREATE TABLE IF NOT EXISTS shares (
  method TEXT NOT NULL CHECK(method IN ('native','link')), updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,post_id)
 );
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;
 """
 
 
@@ -581,8 +587,9 @@ class Database:
             cutoff=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()
             queries = [
                 ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
-                    (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_interactions
-                    FROM users WHERE id=?''', (self.notification_cutoff(),self.notification_cutoff(),user_id)),
+                    (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
+                    +(SELECT COUNT(*) FROM comment_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_interactions
+                    FROM users WHERE id=?''', (self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),user_id)),
                 ("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)),
                 (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
@@ -854,71 +861,74 @@ class Database:
         return (datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
 
     @staticmethod
-    def notification_item(kind,person,timestamp,unread=False,post_id='',title=''):
+    def notification_item(kind,person,timestamp,unread=False,post_id='',title='',comment_id=''):
         return dict(kind=kind,person=person,createdAt=timestamp,unread=unread,
-            expiresAt=(datetime.fromisoformat(timestamp)+timedelta(days=7)).isoformat() if kind!='request' else None,postId=post_id,trackTitle=title)
+            expiresAt=(datetime.fromisoformat(timestamp)+timedelta(days=7)).isoformat() if kind!='request' else None,postId=post_id,trackTitle=title,commentId=comment_id)
 
     @staticmethod
     def notification_summary_query(user_id):
         return ('''SELECT notifications_version AS version,
             (SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
-            (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_interactions,
-            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(Database.notification_cutoff(),Database.notification_cutoff(),user_id,))
+            (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
+            +(SELECT COUNT(*) FROM comment_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_interactions,
+            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(Database.notification_cutoff(),Database.notification_cutoff(),Database.notification_cutoff(),user_id,))
 
     @staticmethod
     def notification_summary(row):
         return dict(version=row['version'],unreadFollowers=row['unread_followers'],unreadInteractions=row['unread_interactions'],requestCount=row['request_count'],unreadCount=row['unread_followers']+row['unread_interactions']+row['request_count'])
 
     def notifications(self,user_id,cursor='',summary_only=False):
-        parameters=[user_id,user_id,self.notification_cutoff(),user_id,self.notification_cutoff()]
+        parameters=[user_id,user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff()]
         restriction=''
         if cursor:
             try:
                 if not isinstance(cursor,str) or len(cursor)>600 or not re.fullmatch(r'[A-Za-z0-9_-]+',cursor):raise ValueError()
                 values=json.loads(base64.urlsafe_b64decode(cursor+'='*(-len(cursor)%4)).decode())
-                if not isinstance(values,list) or len(values) not in (3,4) or any(not isinstance(item,str) for item in values):raise ValueError()
-                if len(values)==3:values.append('')
-                stamp,kind,actor,post_id=values
-                if len(stamp)>50 or kind not in ('follow','request','like','repost') or not 1<=len(actor)<=100 or len(post_id)>100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
+                if not isinstance(values,list) or len(values) not in (3,4,5) or any(not isinstance(item,str) for item in values):raise ValueError()
+                values+=['']*(5-len(values))
+                stamp,kind,actor,post_id,comment_id=values
+                if len(stamp)>50 or kind not in ('follow','request','like','repost','comment') or not 1<=len(actor)<=100 or len(post_id)>100 or len(comment_id)>100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
             except (ValueError,UnicodeError,TypeError):
                 raise APIError(400,'A lista mudou. Reabra as notificações.') from None
-            restriction='WHERE (i.created_at,i.kind,i.actor_id,i.post_id)<(?,?,?,?)'
+            restriction='WHERE (i.created_at,i.kind,i.actor_id,i.post_id,i.event_id)<(?,?,?,?,?)'
             parameters.extend(values)
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
             queries=[self.notification_summary_query(user_id)]
             if not summary_only:
                 queries.append((f'''WITH items AS (
-                    SELECT 'request' AS kind,user_id AS actor_id,created_at,NULL AS read_at,'' AS post_id FROM follow_requests WHERE target_id=?
-                    UNION ALL SELECT 'follow',actor_id,created_at,read_at,'' FROM follow_notifications WHERE user_id=? AND created_at>?
-                    UNION ALL SELECT kind,actor_id,created_at,read_at,post_id FROM interaction_notifications WHERE user_id=? AND created_at>?)
-                    SELECT i.kind,i.created_at,i.read_at,i.post_id,u.id,u.display_name,u.username,u.photo,u.is_private,t.data AS track_data
+                    SELECT 'request' AS kind,user_id AS actor_id,created_at,NULL AS read_at,'' AS post_id,'' AS event_id FROM follow_requests WHERE target_id=?
+                    UNION ALL SELECT 'follow',actor_id,created_at,read_at,'','' FROM follow_notifications WHERE user_id=? AND created_at>?
+                    UNION ALL SELECT kind,actor_id,created_at,read_at,post_id,'' FROM interaction_notifications WHERE user_id=? AND created_at>?
+                    UNION ALL SELECT 'comment',actor_id,created_at,read_at,post_id,comment_id FROM comment_notifications WHERE user_id=? AND created_at>?)
+                    SELECT i.kind,i.created_at,i.read_at,i.post_id,i.event_id,u.id,u.display_name,u.username,u.photo,u.is_private,t.data AS track_data
                     FROM items i JOIN users u ON u.id=i.actor_id LEFT JOIN posts p ON p.id=i.post_id LEFT JOIN tracks t ON t.id=p.track_id {restriction}
-                    ORDER BY i.created_at DESC,i.kind DESC,i.actor_id DESC,i.post_id DESC LIMIT 51''',tuple(parameters)))
+                    ORDER BY i.created_at DESC,i.kind DESC,i.actor_id DESC,i.post_id DESC,i.event_id DESC LIMIT 51''',tuple(parameters)))
             results=db.fetch_many(queries)
             summary=self.notification_summary(results[0][0])
             if summary_only:return dict(summary=summary)
             rows=results[1];items=[]
             for row in rows[:50]:
-                items.append(self.notification_item(row['kind'],dict(self.person(row),isPrivate=bool(row['is_private'])),row['created_at'],row['kind']!='request' and row['read_at'] is None,row['post_id'],json.loads(row['track_data']).get('title','') if row['track_data'] else ''))
+                items.append(self.notification_item(row['kind'],dict(self.person(row),isPrivate=bool(row['is_private'])),row['created_at'],row['kind']!='request' and row['read_at'] is None,row['post_id'],json.loads(row['track_data']).get('title','') if row['track_data'] else '',row['event_id']))
             next_cursor=None
             if len(rows)>50:
-                last=rows[49];payload=[last['created_at'],last['kind'],last['id'],last['post_id']]
+                last=rows[49];payload=[last['created_at'],last['kind'],last['id'],last['post_id'],last['event_id']]
                 next_cursor=base64.urlsafe_b64encode(json.dumps(payload,separators=(',',':')).encode()).decode().rstrip('=')
             return dict(summary=summary,items=items,nextCursor=next_cursor)
 
     def read_notifications(self,user_id,data):
         items=data.get('items')
         if not isinstance(items,list) or len(items)>50:raise APIError(400,'Notificações inválidas.')
-        keys=[];interactions=[]
+        keys=[];interactions=[];comments=[]
         for item in items:
             if not isinstance(item,dict):raise APIError(400,'Notificações inválidas.')
             actor,stamp=text(item.get('actorId'),1,100),text(item.get('createdAt'),1,50)
             kind=item.get('kind','follow')
             if kind=='follow':keys.extend((actor,stamp))
             elif kind in ('like','repost'):interactions.extend((actor,stamp,kind,text(item.get('postId'),1,100)))
+            elif kind=='comment':comments.extend((actor,stamp,text(item.get('postId'),1,100),text(item.get('commentId'),1,100)))
             else:raise APIError(400,'Notificação inválida.')
-        if keys or interactions:
+        if keys or interactions or comments:
             with self.transaction() as db:
                 changed=[]
                 if keys:
@@ -929,6 +939,10 @@ class Database:
                     values=','.join('(?,?,?,?)' for _ in range(len(interactions)//4))
                     changed+=db.execute(f'''UPDATE interaction_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
                         AND (actor_id,created_at,kind,post_id) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*interactions)).fetchall()
+                if comments:
+                    values=','.join('(?,?,?,?)' for _ in range(len(comments)//4))
+                    changed+=db.execute(f'''UPDATE comment_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
+                        AND (actor_id,created_at,post_id,comment_id) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*comments)).fetchall()
                 if changed:self.bump_notifications(db,user_id)
         return self.notifications(user_id,summary_only=True)
 
@@ -936,9 +950,10 @@ class Database:
         actor=text(data.get('actorId'),1,100)
         timestamp=text(data.get('createdAt'),1,50)
         kind=data.get('kind','follow')
-        if kind not in ('follow','like','repost'):raise APIError(400,'Notificação inválida.')
+        if kind not in ('follow','like','repost','comment'):raise APIError(400,'Notificação inválida.')
         with self.transaction() as db:
             if kind=='follow':removed=db.execute('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? AND created_at=? RETURNING actor_id',(user_id,actor,timestamp)).fetchone()
+            elif kind=='comment':removed=db.execute('DELETE FROM comment_notifications WHERE user_id=? AND actor_id=? AND created_at=? AND post_id=? AND comment_id=? RETURNING actor_id',(user_id,actor,timestamp,text(data.get('postId'),1,100),text(data.get('commentId'),1,100))).fetchone()
             else:removed=db.execute('DELETE FROM interaction_notifications WHERE user_id=? AND actor_id=? AND created_at=? AND kind=? AND post_id=? RETURNING actor_id',(user_id,actor,timestamp,kind,text(data.get('postId'),1,100))).fetchone()
             if removed:
                 self.bump_notifications(db,user_id)
@@ -991,7 +1006,12 @@ class Database:
             post=self.accessible(db,user_id,post_id)
             existing=db.execute('SELECT * FROM comments WHERE id=?',(identifier,)).fetchone()
             if existing and (existing['author_id']!=user_id or existing['post_id']!=post_id or existing['body']!=body):raise APIError(409,'Esse comentário mudou. Tente novamente.')
-            if not existing:db.execute('INSERT INTO comments VALUES (?,?,?,?,?)',(identifier,post_id,user_id,body,now_iso()))
+            if not existing:
+                timestamp=now_iso()
+                db.execute('INSERT INTO comments VALUES (?,?,?,?,?)',(identifier,post_id,user_id,body,timestamp))
+                if user_id!=post['owner_id']:
+                    db.execute('INSERT INTO comment_notifications VALUES (?,?,?,?,?,NULL)',(identifier,post['owner_id'],user_id,post_id,timestamp))
+                    self.bump_notifications(db,post['owner_id'])
             rows,total=db.fetch_many([
                 ('SELECT c.*,u.display_name,u.username,u.photo FROM comments c JOIN users u ON u.id=c.author_id WHERE c.id=?',(identifier,)),
                 ('SELECT COUNT(*) AS total FROM comments WHERE post_id=?',(post_id,))])
@@ -1003,7 +1023,9 @@ class Database:
             post=self.accessible(db,user_id,post_id)
             row=db.execute('SELECT author_id FROM comments WHERE id=? AND post_id=?',(identifier,post_id)).fetchone()
             if row and user_id not in (row['author_id'],post['owner_id']):raise APIError(403,'Você só pode apagar seus comentários ou os comentários dos seus Ressoas.')
-            if row:db.execute('DELETE FROM comments WHERE id=?',(identifier,))
+            if row:
+                db.execute('DELETE FROM comments WHERE id=?',(identifier,))
+                if row['author_id']!=post['owner_id']:self.bump_notifications(db,post['owner_id'])
             return dict(ok=True,total=db.execute('SELECT COUNT(*) FROM comments WHERE post_id=?',(post_id,)).fetchone()[0])
 
     def likes(self, user_id, post_id):
