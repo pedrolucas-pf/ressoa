@@ -6,13 +6,13 @@ let pickerNumber = 0;
 
 export function createTrackPicker(host, { onChange, onPreview, onStop, onError, label = 'Música' }) {
   const id = `track-picker-${++pickerNumber}`;
-  host.innerHTML = `<label for="${id}">Música</label><div class="picker-sources" hidden><button type="button" data-catalog-source="deezer" aria-pressed="true">Deezer</button><button type="button" data-catalog-source="spotify" aria-pressed="false">Spotify</button><button type="button" class="text-button picker-connect">Conectar Spotify</button></div><div class="picker-search"><span aria-hidden="true">⌕</span><input id="${id}" class="catalog-query" type="search" placeholder="Música, artista ou link da faixa" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results"></div><p class="picker-status" role="status"></p><div class="catalog-results" id="${id}-results" role="listbox" aria-label="Resultados da busca" hidden></div><button type="button" class="text-button picker-more" hidden>Ver mais resultados</button><div class="selected-track" hidden></div>`;
+  host.innerHTML = `<label for="${id}">Música</label><div class="picker-sources" hidden><button type="button" data-catalog-source="deezer" aria-pressed="true">Prévias</button><button type="button" data-catalog-source="spotify" aria-pressed="false">Conectar Spotify</button></div><p class="form-note picker-source-note" hidden></p><div class="picker-search"><span aria-hidden="true">⌕</span><input id="${id}" class="catalog-query" type="search" placeholder="Música, artista ou link da faixa" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results"></div><p class="picker-status" role="status"></p><div class="catalog-results" id="${id}-results" role="listbox" aria-label="Resultados da busca" hidden></div><button type="button" class="text-button picker-more" hidden>Ver mais resultados</button><div class="selected-track" hidden></div>`;
   const input = host.querySelector('input');
   host.querySelector('label').textContent=label;
   const list = host.querySelector('.catalog-results');
   const status = host.querySelector('.picker-status');
   const selected = host.querySelector('.selected-track');
-  const more=host.querySelector('.picker-more'),sources=host.querySelector('.picker-sources'),connect=host.querySelector('.picker-connect');
+  const more=host.querySelector('.picker-more'),sources=host.querySelector('.picker-sources'),spotify=host.querySelector('[data-catalog-source="spotify"]'),sourceNote=host.querySelector('.picker-source-note');
   let results = [], current = null, highlighted = -1, timer, request, generation = 0,nextOffset=null,source='deezer',connected=false,manualSource=false;
   function collapse() { list.hidden = true;more.hidden=true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); highlighted = -1; }
   function cancel() { clearTimeout(timer); request?.abort(); generation++; input.removeAttribute('aria-busy'); }
@@ -63,14 +63,16 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
   }
   more.addEventListener('click',()=>{if(nextOffset!==null)void search(input.value.trim(),true);});
   function updateSource(state){
-    connected=state.connected;sources.hidden=!state.configured;connect.hidden=connected;
+    connected=state.connected;sources.hidden=!state.configured;sourceNote.hidden=!state.configured;
     if(!manualSource)source=connected?'spotify':'deezer';
+    if(!connected&&source==='spotify')source='deezer';
+    spotify.textContent=connected?'Spotify':'Conectar Spotify';
+    sourceNote.textContent=source==='spotify'?'Escolha até 30 segundos em qualquer parte da música.':'Prévias pelo Deezer, sem conectar uma conta.';
     sources.querySelectorAll('[data-catalog-source]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.catalogSource===source)));
   }
   getSpotifyStatus().then(updateSource).catch(()=>{});
   window.addEventListener('spotifychange',event=>{updateSource(event.detail);const q=input.value.trim();if(q.length>=2)void search(q);});
-  async function connectAccount(){try{await connectSpotify();}catch(error){onError?.(error.message);}}
-  connect.addEventListener('click',()=>void connectAccount());
+  async function connectAccount(){spotify.disabled=true;try{await connectSpotify();}catch(error){onError?.(error.message);}finally{spotify.disabled=false;}}
   sources.addEventListener('click',event=>{
     const button=event.target.closest('[data-catalog-source]');if(!button)return;
     if(button.dataset.catalogSource==='spotify'&&!connected){manualSource=false;void connectAccount();return;}
