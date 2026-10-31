@@ -175,6 +175,7 @@ def initialize(dsn, sqlite_schema):
             if statement.strip():db.execute(statement)
         db.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private INTEGER NOT NULL DEFAULT 0')
         db.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_version INTEGER NOT NULL DEFAULT 0')
+        db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS background_layout TEXT NOT NULL DEFAULT '{}'")
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS lyric_excerpt TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS feed_published_at TEXT NOT NULL DEFAULT ''")
         db.execute('ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_excerpt TEXT')
@@ -194,3 +195,4 @@ def initialize(dsn, sqlite_schema):
         db.execute('INSERT INTO ressoa_schema VALUES (7) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (8) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (9) ON CONFLICT DO NOTHING')
+        db.execute('INSERT INTO ressoa_schema VALUES (10) ON CONFLICT DO NOTHING')

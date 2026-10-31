@@ -1,5 +1,6 @@
 import { tracks, musicDetails } from './catalog-store.js';
 import { createTrackPicker } from './track-picker.js';
+import { createBackgroundEditor, cleanBackgroundLayout, setProfileBackground } from './profile-background.js';
 import { weekKey, nextWeekLabel, lockedForWeek } from './weekly.js';
 import { createPlayback } from './playback.js';
 import { authorKey, rememberSeen } from './social.js';
@@ -85,7 +86,8 @@ function cleanProfile(value) {
     isPrivate:value.isPrivate===true,
     favorites: Array.isArray(value.favorites) ? [...new Set(value.favorites.filter(index => Number.isInteger(index) && tracks[index]))].slice(0, 6) : [],
     pinned: (Array.isArray(value.pinned) ? value.pinned : typeof value.pinned === 'string' ? [value.pinned] : []).filter(id => typeof id === 'string'),
-    background: Number.isInteger(value.background) && tracks[value.background] ? value.background : null
+    background: Number.isInteger(value.background) && tracks[value.background] ? value.background : null,
+    backgroundLayout: cleanBackgroundLayout(value.backgroundLayout)
   };
 }
 let profileInfo = cleanProfile(read('ressoa.profile', defaultProfile));
@@ -775,8 +777,7 @@ document.addEventListener('keydown',event=>{
 function applyProfileBackground() {
  const info=visitedId?visitedProfile?.profile:profileInfo;
  const has=page==='perfil'&&Number.isInteger(info?.background)&&tracks[info.background];
- document.body.classList.toggle('profile-background',Boolean(has));
- if(has)document.body.style.setProperty('--profile-art',`url(${JSON.stringify(cover(info.background))})`);else document.body.style.removeProperty('--profile-art');
+ setProfileBackground(has?cover(info.background):'',info?.backgroundLayout);
 }
 function renderProfile() {
  const own=!visitedId,info=own?profileInfo:visitedProfile?.profile;
@@ -853,8 +854,9 @@ const profileForm = $('#profile-form');
 bindUsernameValidation(profileForm.elements.handle);
 let pendingPhoto = '';
 let pendingBackground = null;
-const backgroundPicker = createTrackPicker($('#background-track-picker'), { ...pickerOptions, onChange: index => { pendingBackground = index; } });
-$('#remove-background').addEventListener('click', () => { pendingBackground = null; backgroundPicker.reset(); });
+const backgroundEditor=createBackgroundEditor($('#background-editor'));
+const backgroundPicker = createTrackPicker($('#background-track-picker'), { artworkOnly:true,label:'Música da capa',onError:toast,onChange:index=>{pendingBackground=index;backgroundEditor.set(Number.isInteger(index)?cover(index):'');} });
+$('#remove-background').addEventListener('click', () => { pendingBackground = null; backgroundPicker.reset();backgroundEditor.set(''); });
 let photoBusy = false;
 $('#choose-photo').addEventListener('click', () => $('#profile-photo').click());
 function renderFavoriteOptions() {
@@ -869,6 +871,7 @@ $('#edit-profile').addEventListener('click', () => {
   pendingBackground = profileInfo.background;
   backgroundPicker.reset();
   if (Number.isInteger(pendingBackground)) backgroundPicker.setSelection(pendingBackground, false);
+  backgroundEditor.set(Number.isInteger(pendingBackground)?cover(pendingBackground):'',profileInfo.backgroundLayout);
   renderFavoriteOptions();
   profileForm.elements.displayName.value = profileInfo.displayName;
   profileForm.elements.handle.value = profileInfo.handle;
@@ -915,7 +918,7 @@ profileForm.addEventListener('submit', async event => {
   if (name.length < 2) { profileForm.elements.displayName.setCustomValidity('Use ao menos duas letras.'); profileForm.elements.displayName.reportValidity(); return; }
   const values=favoritePickers.map(picker=>picker.value).filter(value=>value!==null);
   if(new Set(values).size!==values.length){$('#favorite-error').textContent='Escolha músicas diferentes para suas favoritas.';favoritePickers[0].input.focus();return;}
-  const updated = cleanProfile({ ...profileInfo, displayName: name, handle: profileForm.elements.handle.value.trim(), bio: profileForm.elements.bio.value.trim(), favorites: values.map(Number), photo: pendingPhoto, background: pendingBackground,isPrivate:profileForm.elements.isPrivate.checked });
+  const updated = cleanProfile({ ...profileInfo, displayName: name, handle: profileForm.elements.handle.value.trim(), bio: profileForm.elements.bio.value.trim(), favorites: values.map(Number), photo: pendingPhoto, background: pendingBackground,backgroundLayout:backgroundEditor.value,isPrivate:profileForm.elements.isPrivate.checked });
   savingProfile=true;
   const submit=profileForm.querySelector('[type="submit"]'),submitLabel=submit.textContent;submit.disabled=true;submit.textContent='Salvando…';submit.setAttribute('aria-busy','true');
   let stored;
@@ -1035,7 +1038,7 @@ const shareUrl = () => sharePost?new URL(`/#ressoa/${encodeURIComponent(sharePos
 $('#download-share').addEventListener('click',()=>{if(shareFile)downloadFile(shareFile,'ressoa-card.png');});
 $('#copy-share-link').addEventListener('click',async()=>{try{if(sharePost){await navigator.clipboard.writeText(shareUrl());toast('Link copiado.');}}catch{toast('O navegador não permitiu copiar o link.');}});
 $('#share-dialog').addEventListener('close',()=>{shareGeneration++;shareFile=null;sharePost=null;clearSharePreview();});
-$('#profile-editor').addEventListener('close',()=>{backgroundPicker.close();favoritePickers.forEach(picker=>picker.close());stopPreview();});
+$('#profile-editor').addEventListener('close',()=>{backgroundPicker.close();backgroundEditor.stop();favoritePickers.forEach(picker=>picker.close());stopPreview();});
 document.addEventListener('click',async event=>{
  const play=event.target.closest('[data-play]');if(play){const post=allPosts().find(item=>item.id===play.dataset.playPost);toggleCoverPlayer(play,Number(play.dataset.play),event,post?.audioExcerpt);return;}
  if(event.target.closest('[data-person]'))document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());

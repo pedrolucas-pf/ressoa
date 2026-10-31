@@ -103,11 +103,24 @@ def clean_track(value):
                 url=f'https://open.spotify.com/track/{track_id}' if provider == 'spotify' else f'https://www.deezer.com/track/{track_id}')
 
 
+def clean_background_layout(value=None):
+    if value is None:value={}
+    if not isinstance(value,dict) or value.get('fit','cover') not in ('cover','contain'):
+        raise APIError(400,'Enquadramento da capa inválido.')
+    result=dict(fit=value.get('fit','cover'))
+    for key,minimum,maximum,default in (('zoom',.5,2.5,1),('x',0,100,50),('y',0,100,50)):
+        number=value.get(key,default)
+        if type(number) not in (int,float) or not math.isfinite(number) or not minimum<=number<=maximum:
+            raise APIError(400,'Ajuste o tamanho e a posição da capa dentro dos limites.')
+        result[key]=round(number,2)
+    return result
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
  id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, username TEXT NOT NULL UNIQUE COLLATE BINARY,
  password_hash TEXT NOT NULL, display_name TEXT NOT NULL, bio TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '',
- favorites TEXT NOT NULL DEFAULT '[]', pinned TEXT NOT NULL DEFAULT '[]', background TEXT,
+ favorites TEXT NOT NULL DEFAULT '[]', pinned TEXT NOT NULL DEFAULT '[]', background TEXT, background_layout TEXT NOT NULL DEFAULT '{}',
  entries_version INTEGER NOT NULL DEFAULT 0, profile_version INTEGER NOT NULL DEFAULT 0,
  draft TEXT NOT NULL DEFAULT '{}', seen TEXT NOT NULL DEFAULT '{}', imported_at TEXT, created_at TEXT NOT NULL,
  is_private INTEGER NOT NULL DEFAULT 0, notifications_version INTEGER NOT NULL DEFAULT 0
@@ -182,7 +195,7 @@ CREATE TABLE IF NOT EXISTS shares (
  method TEXT NOT NULL CHECK(method IN ('native','link')), updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,post_id)
 );
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 """
 
 
@@ -214,7 +227,7 @@ class Database:
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript(SCHEMA)
-            for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('users','notifications_version','INTEGER NOT NULL DEFAULT 0'),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''"),('posts','audio_excerpt','TEXT')):
+            for table,column,definition in (('users','is_private','INTEGER NOT NULL DEFAULT 0'),('users','notifications_version','INTEGER NOT NULL DEFAULT 0'),('users','background_layout',"TEXT NOT NULL DEFAULT '{}'"),('posts','lyric_excerpt',"TEXT NOT NULL DEFAULT ''"),('posts','feed_published_at',"TEXT NOT NULL DEFAULT ''"),('posts','audio_excerpt','TEXT')):
                 if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
             self._migrate_username_case(db)
@@ -495,7 +508,7 @@ class Database:
             raise APIError(400,'Página inválida.')
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
-            user=db.execute('SELECT id,display_name,username,bio,photo,favorites,pinned,background,is_private FROM users WHERE id=?',(target_id,)).fetchone()
+            user=db.execute('SELECT id,display_name,username,bio,photo,favorites,pinned,background,background_layout,is_private FROM users WHERE id=?',(target_id,)).fetchone()
             if not user:
                 raise APIError(404,'Esse perfil não foi encontrado.')
             can_view=self.can_view_profile(db,viewer_id,target_id)
@@ -504,7 +517,7 @@ class Database:
             state='following' if following else 'requested' if requested else 'none'
             if not can_view:
                 return dict(id=target_id,canView=False,canViewRelations=False,followState=state,
-                    profile=dict(displayName=user['display_name'],handle=user['username'],bio=user['bio'],photo=user['photo'],isPrivate=True,favorites=[],pinned=[],background=None),
+                    profile=dict(displayName=user['display_name'],handle=user['username'],bio=user['bio'],photo=user['photo'],isPrivate=True,favorites=[],pinned=[],background=None,backgroundLayout=clean_background_layout()),
                     entries=[],reposts=[],weekly=None,nextEntriesOffset=None,nextRepostsOffset=None)
             # Check pins again on the server; never reveal IDs of private entries.
             wanted=json.loads(user['pinned'])
@@ -521,7 +534,7 @@ class Database:
             selection=db.execute('SELECT p.* FROM posts p JOIN weekly w ON w.post_id=p.id WHERE w.user_id=? AND w.week_key=? AND w.deleted_at IS NULL AND p.visibility=\'public\'',(target_id,current_week())).fetchone()
             self.prime_posts(db,[*rows,*reposted,*([selection] if selection else [])],[*json.loads(user['favorites']),user['background']])
             profile=dict(displayName=user['display_name'],handle=user['username'],bio=user['bio'],photo=user['photo'],
-                         isPrivate=bool(user['is_private']),favorites=[track for key in json.loads(user['favorites']) if (track:=self.track(db,key))],pinned=pinned,background=self.track(db,user['background']))
+                         isPrivate=bool(user['is_private']),favorites=[track for key in json.loads(user['favorites']) if (track:=self.track(db,key))],pinned=pinned,background=self.track(db,user['background']),backgroundLayout=clean_background_layout(json.loads(user['background_layout'])))
             return dict(id=target_id,profile=profile,canView=True,canViewRelations=viewer_id==target_id or (not user['is_private'] and following),followState=state,entries=[self.post(db,row) for row in rows[:24]],
                         reposts=[self.post(db,row) for row in reposted[:24]],weekly=self.post(db,selection),
                         nextEntriesOffset=offset+24 if len(rows)>24 else None,nextRepostsOffset=repost_offset+24 if len(reposted)>24 else None)
@@ -641,7 +654,7 @@ class Database:
             requested=[row['target_id'] for row in requested_rows]
             self.prime_posts(db,[*own,*public,*extra,*([item] if selection and item else [])],[*json.loads(user['favorites']),user['background']])
             return dict(user=dict(id=user_id, email=user['email'], username=user['username']),
-                        profile=dict(displayName=user['display_name'], handle=user['username'], bio=user['bio'], photo=user['photo'],isPrivate=bool(user['is_private']), favorites=[self.track(db, key) for key in json.loads(user['favorites'])], pinned=json.loads(user['pinned']), background=self.track(db, user['background'])),
+                        profile=dict(displayName=user['display_name'], handle=user['username'], bio=user['bio'], photo=user['photo'],isPrivate=bool(user['is_private']), favorites=[self.track(db, key) for key in json.loads(user['favorites'])], pinned=json.loads(user['pinned']), background=self.track(db, user['background']),backgroundLayout=clean_background_layout(json.loads(user['background_layout']))),
                         entries=[self.post(db, row) for row in own], publicPosts=[self.post(db, row) for row in shared.values()], weekly=weekly,
                         saved=[row['post_id'] for row in actions if row['kind'] == 'saved'],
                         social=dict(following=[row['id'] for row in following],requested=requested, reposts=[row['post_id'] for row in actions if row['kind'] == 'repost'], likes={row['post_id']: ['me'] for row in actions if row['kind'] == 'like'}, seen=json.loads(user['seen'])),
@@ -735,7 +748,7 @@ class Database:
         if not isinstance(favorites, list) or len(favorites) > 6 or not isinstance(pinned, list) or len(pinned) > 100:
             raise APIError(400, 'Favoritas ou fixações inválidas.')
         with self.transaction() as db:
-            current = db.execute('SELECT profile_version,is_private,username FROM users WHERE id=?', (user_id,)).fetchone()
+            current = db.execute('SELECT profile_version,is_private,username,background,background_layout FROM users WHERE id=?', (user_id,)).fetchone()
             version=current['profile_version']
             if data.get('version') != version:
                 raise APIError(409, 'Seu perfil mudou em outro dispositivo. Atualizamos os dados; tente novamente.')
@@ -745,6 +758,8 @@ class Database:
             if type(private) is not bool:raise APIError(400,'Privacidade do perfil inválida.')
             favorite_ids = list(dict.fromkeys(self.store_track(db, item) for item in favorites))
             background = self.store_track(db, value['background']) if value.get('background') else None
+            layout=clean_background_layout(value['backgroundLayout'] if 'backgroundLayout' in value else json.loads(current['background_layout']) if background==current['background'] else None)
+            if background is None:layout=clean_background_layout()
             allowed_pins = []
             for identifier in pinned:
                 if not isinstance(identifier, str):
@@ -752,7 +767,7 @@ class Database:
                 if db.execute("SELECT id FROM posts WHERE id=? AND owner_id=? AND visibility='public' AND kind='entry'", (identifier, user_id)).fetchone():
                     allowed_pins.append(identifier)
             try:
-                db.execute('UPDATE users SET display_name=?,username=?,bio=?,photo=?,favorites=?,pinned=?,background=?,is_private=?,profile_version=profile_version+1 WHERE id=?', (name, handle, text(value.get('bio', ''), 0, 180), photo, json.dumps(favorite_ids), json.dumps(allowed_pins), background,int(private),user_id))
+                db.execute('UPDATE users SET display_name=?,username=?,bio=?,photo=?,favorites=?,pinned=?,background=?,background_layout=?,is_private=?,profile_version=profile_version+1 WHERE id=?', (name, handle, text(value.get('bio', ''), 0, 180), photo, json.dumps(favorite_ids), json.dumps(allowed_pins), background,json.dumps(layout),int(private),user_id))
                 if current['is_private'] and not private:
                     db.execute('''INSERT INTO follow_notifications(user_id,actor_id,created_at,read_at)
                         SELECT r.target_id,r.user_id,?,NULL FROM follow_requests r WHERE r.target_id=?

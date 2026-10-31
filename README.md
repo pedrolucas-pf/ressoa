@@ -33,7 +33,7 @@ A interface usa tema escuro, capas de álbuns e elementos inspirados em discos. 
 | **For you e Seguindo** | Descobrir Ressoas ou acompanhar apenas quem você segue, com navegação vertical por toque, mouse e teclado. |
 | **Meus sons** | Organizar o diário em blocos, criar, editar, apagar e escolher a visibilidade das publicações. |
 | **Ressoa da semana** | Escolher uma música por semana, com destaque no feed e no perfil, independente do diário. |
-| **Perfil** | Personalizar foto, bio e fundo; escolher até seis favoritas; fixar publicações e reunir seus Ressoas e reposts. |
+| **Perfil** | Personalizar foto e bio; escolher e enquadrar a capa de fundo com zoom e posição ajustáveis; escolher até seis favoritas; fixar publicações e reunir seus Ressoas e reposts. |
 | **Conexões** | Buscar pessoas, seguir perfis e aprovar solicitações quando sua conta for privada. |
 | **Interações** | Curtir sem contagem pública, comentar, repostar e salvar publicações. O autor pode consultar curtidas e reposts. |
 | **Notificações** | Acompanhar novos seguidores, solicitações, curtidas, reposts e comentários no mesmo lugar. |

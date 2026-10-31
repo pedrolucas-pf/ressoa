@@ -4,7 +4,7 @@ import { trackSummary } from './track-context.js';
 import { getSpotifyStatus, connectSpotify } from './spotify.js';
 let pickerNumber = 0;
 
-export function createTrackPicker(host, { onChange, onPreview, onStop, onError, label = 'Música' }) {
+export function createTrackPicker(host, { onChange, onPreview, onStop, onError, label = 'Música', artworkOnly = false }) {
   const id = `track-picker-${++pickerNumber}`;
   host.innerHTML = `<label for="${id}">Música</label><div class="picker-sources" hidden><button type="button" data-catalog-source="deezer" aria-pressed="true">Prévias</button><button type="button" data-catalog-source="spotify" aria-pressed="false">Conectar Spotify</button></div><p class="form-note picker-source-note" hidden></p><div class="picker-search"><span aria-hidden="true">⌕</span><input id="${id}" class="catalog-query" type="search" placeholder="Música, artista ou link da faixa" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results"></div><p class="picker-status" role="status"></p><div class="catalog-results" id="${id}-results" role="listbox" aria-label="Resultados da busca" hidden></div><button type="button" class="text-button picker-more" hidden>Ver mais resultados</button><div class="selected-track" hidden></div>`;
   const input = host.querySelector('input');
@@ -13,6 +13,7 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
   const status = host.querySelector('.picker-status');
   const selected = host.querySelector('.selected-track');
   const more=host.querySelector('.picker-more'),sources=host.querySelector('.picker-sources'),spotify=host.querySelector('[data-catalog-source="spotify"]'),sourceNote=host.querySelector('.picker-source-note');
+  if(artworkOnly)sources.querySelector('[data-catalog-source="deezer"]').textContent='Deezer';
   let results = [], current = null, highlighted = -1, timer, request, generation = 0,nextOffset=null,source='deezer',connected=false,manualSource=false;
   function collapse() { list.hidden = true;more.hidden=true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); highlighted = -1; }
   function cancel() { clearTimeout(timer); request?.abort(); generation++; input.removeAttribute('aria-busy'); }
@@ -25,10 +26,10 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
     if (!Number.isInteger(index) || !tracks[index]) { clear(notify); return; }
     current = index;
     const track = tracks[index], detail = musicDetails[index];
-    selected.innerHTML = `<div class="selection-summary"><img src="${escape(detail.artwork || 'assets/cover-unavailable.svg')}" alt="" width="48" height="48"><div><strong>${escape(track.title)}</strong><span>${escape(track.artist)}${track.album ? ` · ${escape(track.album)}` : ''}</span></div><button type="button" class="icon-button clear-track" aria-label="Trocar música">×</button></div><div class="selection-player" data-preview-player></div>`;
+    selected.innerHTML = `<div class="selection-summary"><img src="${escape(detail.artwork || 'assets/cover-unavailable.svg')}" alt="" width="48" height="48"><div><strong>${escape(track.title)}</strong><span>${escape(track.artist)}${track.album ? ` · ${escape(track.album)}` : ''}</span></div><button type="button" class="icon-button clear-track" aria-label="Trocar música">×</button></div>${artworkOnly?'':'<div class="selection-player" data-preview-player></div>'}`;
     selected.hidden = false;
     selected.querySelector('.selection-summary span').textContent=[track.artist,trackSummary(index)].filter(Boolean).join(' · ');
-    onPreview?.(selected.querySelector('[data-preview-player]'), index);
+    if(!artworkOnly)onPreview?.(selected.querySelector('[data-preview-player]'), index);
     if (notify) onChange?.(index);
   }
   async function choose(index) {
@@ -67,7 +68,7 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
     if(!manualSource)source=connected?'spotify':'deezer';
     if(!connected&&source==='spotify')source='deezer';
     spotify.textContent=connected?'Spotify':'Conectar Spotify';
-    sourceNote.textContent=source==='spotify'?'Escolha até 30 segundos em qualquer parte da música.':'Prévias pelo Deezer, sem conectar uma conta.';
+    sourceNote.textContent=artworkOnly?'Escolha uma música para usar a capa como fundo.':source==='spotify'?'Escolha até 30 segundos em qualquer parte da música.':'Prévias pelo Deezer, sem conectar uma conta.';
     sources.querySelectorAll('[data-catalog-source]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.catalogSource===source)));
   }
   getSpotifyStatus().then(updateSource).catch(()=>{});

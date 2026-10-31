@@ -438,11 +438,23 @@ form .picker-search input.catalog-query[type="search"] { min-width: 0; margin: 0
 .weekly-feature-body .track-title {font-size:26px;margin-top:18px}
 .weekly-reflection {font:19px/1.7 var(--serif);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:14px;max-height:230px;overflow:auto}
 body.profile-background {position:relative;isolation:isolate}
-body.profile-background::before {content:'';position:fixed;inset:0;z-index:-1;background:var(--profile-art) center/cover;opacity:.12;pointer-events:none}
+body.profile-background::before {content:'';position:fixed;inset:0;z-index:-1;background-image:var(--profile-art);background-position:var(--profile-position,center);background-size:var(--profile-size,cover);background-repeat:no-repeat;opacity:.12;pointer-events:none}
 .background-fields {border:0;margin:25px 0 0;padding:0}
 .background-fields>legend {font-size:12px}
 .background-fields .track-picker {margin-top:12px}
 .background-fields>.text-button {margin-top:15px}
+#background-editor{margin-top:20px;}
+.background-fit{display:flex;gap:6px;padding:4px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
+.background-fit button{flex:1;min-height:36px;padding:7px 10px;border-radius:5px;font-size:12px;color:var(--muted);}
+.background-fit button[aria-pressed="true"]{color:var(--bg);background:var(--text);}
+.background-preview{height:260px;display:grid;place-items:center;margin-top:15px;padding:10px;background:#080808;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.background-frame{flex-shrink:0;background-image:var(--profile-art);background-size:var(--profile-size,cover);background-position:var(--profile-position,center);background-repeat:no-repeat;background-color:var(--bg);border-radius:3px;box-shadow:0 0 0 1px #ffffff20;cursor:grab;touch-action:none;user-select:none;}
+.background-frame.dragging{cursor:grabbing;}
+.background-hint{margin-top:8px;font-size:11px;}
+.background-adjustments{display:grid;gap:13px;margin:20px 0 15px;}
+.background-adjustments label{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:12px;margin:0;}
+.background-adjustments output{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;}
+.background-adjustments input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:var(--text);cursor:pointer;}
 .person-row {display:flex;gap:18px;align-items:center;padding:20px 0;border-bottom:1px solid var(--border);font-size:13px}
 .person-row .interaction-label {color:var(--text);margin-top:4px;}
 .person-row .profile-avatar {width:45px;height:45px;font-size:18px}
