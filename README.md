@@ -148,6 +148,10 @@ O plano gratuito do Render pode suspender a aplicação após períodos sem aces
 
 A reprodução pelo SDK exige Spotify Premium. Aplicativos em desenvolvimento têm limites de usuários autorizados; ampliar o acesso depende das [regras do Spotify](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
 
+Em um aplicativo novo no modo de desenvolvimento, são permitidas até **cinco contas Spotify autorizadas**. No Dashboard, abra **Settings → Users Management → Add new user** e informe o nome e o e-mail usado no Spotify de cada pessoa de teste. Criar uma conta no Ressoa não inclui essa pessoa na lista do Spotify. Uma conta não autorizada pode fazer login no Spotify e ainda receber erro 403 ao concluir a conexão.
+
+A conexão fica vinculada à conta Ressoa no banco, podendo ser recuperada em outro dispositivo. Ao retornar da autorização no celular, o site também consulta a confirmação no servidor, sem depender apenas da comunicação entre abas. Se o navegador perder a referência à aba original, a página de retorno leva ao início do Ressoa. Contas sem Premium podem concluir a conexão para o catálogo quando autorizadas pelo Spotify; a exigência de Premium continua sendo verificada na reprodução.
+
 Alguns navegadores móveis exigem um toque no play para liberar o áudio. Desconectar o Spotify remove essa conexão, preservando a conta e as publicações no Ressoa. Se o domínio do site mudar, atualize também a URI de retorno no painel do Spotify.
 
 </details>

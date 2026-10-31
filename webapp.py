@@ -166,15 +166,16 @@ class Application:
         user_id = self.db.session_user(token) if token else None
         data = self.body(env) if method in ('POST', 'PUT', 'DELETE') else {}
         if path=='/api/spotify/callback' and method=='GET':
-            params=parse_qs(env.get('QUERY_STRING',''));connected=False;message='Spotify conectado. Você pode voltar ao Ressoa.'
+            params=parse_qs(env.get('QUERY_STRING',''));connected=False;message='Spotify conectado. Você pode voltar ao Ressoa.';status=200
             try:
                 self.spotify.finish(user_id,token,params.get('state',[''])[0],params.get('code',[''])[0],params.get('error',[''])[0]);connected=True
-            except APIError as error:message=error.message
+            except APIError as error:message=error.message;status=error.status
             payload=json.dumps(dict(type='ressoa-spotify',connected=connected,message=message),ensure_ascii=False).replace('<','\\u003c')
             origin=json.dumps(self.public_origin(env)).replace('<','\\u003c')
-            script=f'if(window.opener){{window.opener.postMessage({payload},{origin});if({str(connected).lower()})window.close();}}'
-            html=f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Spotify · Ressoa</title><body style="background:#101010;color:#ededed;font:16px system-ui;padding:40px;line-height:1.7"><h1>Ressoa + Spotify</h1><p>{escape(message)}</p><button onclick="window.close()" style="padding:12px 24px">Fechar</button><script>{script}</script></body></html>'
-            return (200 if connected else 400),html.encode('utf-8'),[('Content-Type','text/html; charset=utf-8')]
+            home=json.dumps(self.public_origin(env)+'/').replace('<','\\u003c')
+            script=f'history.replaceState(null,"",location.pathname);let notified=false;try{{if(window.opener&&!window.opener.closed){{window.opener.postMessage({payload},{origin});notified=true;if({str(connected).lower()})window.close();}}}}catch{{}}if({str(connected).lower()}&&!notified)location.replace({home});'
+            html=f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Spotify · Ressoa</title><body style="background:#101010;color:#ededed;font:16px system-ui;padding:40px;line-height:1.7"><h1>Ressoa + Spotify</h1><p>{escape(message)}</p><a href="{escape(self.public_origin(env)+"/",quote=True)}" style="display:inline-block;background:#ededed;color:#101010;padding:10px 18px;border-radius:8px;text-decoration:none">Voltar ao Ressoa</a><button onclick="window.close()" style="margin-left:12px;padding:10px 18px">Fechar</button><script>{script}</script></body></html>'
+            return status,html.encode('utf-8'),[('Content-Type','text/html; charset=utf-8')]
         if path == '/api/password/forgot' and method == 'POST':
             self.db.limit('recovery-ip:'+env.get('REMOTE_ADDR',''), 5, 900)
             email = data.get('email')

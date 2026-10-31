@@ -2,7 +2,7 @@ import { api, getAccount } from './session.js';
 
 let cached=null,statusJob=null,owner=null,notify=()=>{};
 let sdkJob=null,player=null,deviceId=null,playerJob=null,current=null,clock=null,revision=0;
-let playQueue=Promise.resolve(),popup=null;
+let playQueue=Promise.resolve(),popup=null,checkConnection=null;
 export const setSpotifyFeedback=callback=>{notify=callback;};
 
 function updateControls(status){
@@ -31,16 +31,17 @@ export async function getSpotifyStatus(force=false){
   if(owner!==user){const previous=owner;owner=user;cached=null;statusJob=null;if(previous!==null)stopSpotifyPlayback();player?.disconnect();player=null;deviceId=null;playerJob=null;}
   if(cached&&!force)return cached;
   if(statusJob){if(!force)return statusJob;await statusJob.catch(()=>{});}
-  statusJob=api('/api/spotify/status').then(status=>{
+  const job=api('/api/spotify/status').then(status=>{
     if(owner!==user)return {configured:false,connected:false};cached=status;
     if(!status.connected&&player){stopSpotifyPlayback();releasePlayer();}
     updateControls(status);return status;
-  }).finally(()=>{statusJob=null;});
-  return statusJob;
+  });statusJob=job;void job.finally(()=>{if(statusJob===job)statusJob=null;}).catch(()=>{});
+  return job;
 }
 
 export async function connectSpotify(){
   if(popup&&!popup.closed){popup.focus();return;}
+  const account=getAccount()?.user.id;
   popup=window.open('about:blank','ressoa-spotify','popup,width=520,height=720');
   if(!popup)throw new Error('Permita a janela de conexão com Spotify e tente novamente.');
   const target=popup;target.document.title='Ressoa + Spotify';target.document.body.textContent='Conectando ao Spotify…';
@@ -48,21 +49,46 @@ export async function connectSpotify(){
   try{({url}=await api('/api/spotify/connect',{method:'POST',body:{}}));}
   catch(error){target.close();popup=null;throw error;}
   return new Promise((resolve,reject)=>{
-    let timeout,closed,received=false;
-    const finish=(error)=>{window.removeEventListener('message',receive);clearTimeout(timeout);clearInterval(closed);if(popup===target)popup=null;target.close();error?reject(error):resolve();};
+    let timeout,closed,poll,received=false,settled=false,checking=false;
+    const finish=(error)=>{if(settled)return;settled=true;window.removeEventListener('message',receive);clearTimeout(timeout);clearInterval(closed);clearInterval(poll);if(checkConnection===check)checkConnection=null;if(popup===target)popup=null;try{target.close();}catch{}error?reject(error):resolve();};
+    const complete=status=>{
+      if(settled)return;
+      if(getAccount()?.user.id!==account){finish(new Error('Sua conta Ressoa mudou. Conecte o Spotify novamente.'));return;}
+      window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));document.getElementById('spotify-dialog')?.close();finish();
+    };
+    const verify=async wasClosed=>{
+      if(settled||received||checking)return;checking=true;
+      try{
+        if(getAccount()?.user.id!==account){finish(new Error('Sua conta Ressoa mudou. Conecte o Spotify novamente.'));return;}
+        const status=await getSpotifyStatus(true);if(settled||received)return;
+        if(status.connected)complete(status);
+        else if(wasClosed)finish(new Error('A conexão foi fechada antes da confirmação. Tente novamente.'));
+      }catch(error){if(wasClosed)finish(error);}finally{checking=false;}
+    };
+    const check=()=>verify(target.closed&&document.hasFocus());checkConnection=check;
     const receive=async event=>{
-      if(received||event.origin!==location.origin||event.source!==target||event.data?.type!=='ressoa-spotify')return;
+      if(settled||received||event.origin!==location.origin||event.source!==target||event.data?.type!=='ressoa-spotify')return;
       received=true;clearInterval(closed);
       if(!event.data.connected){finish(new Error(event.data.message||'Conexão cancelada.'));return;}
-      try{const status=await getSpotifyStatus(true);window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));document.getElementById('spotify-dialog')?.close();finish();}
+      try{const status=await getSpotifyStatus(true);if(!status.connected)throw new Error('O Spotify ainda não confirmou a conexão. Tente novamente.');complete(status);}
       catch(error){finish(error);}
     };
     window.addEventListener('message',receive);
     timeout=setTimeout(()=>finish(new Error('A conexão expirou. Tente novamente.')),600000);
-    closed=setInterval(()=>{if(target.closed)finish(new Error('A conexão foi fechada. Tente novamente.'));},700);
+    closed=setInterval(()=>{if(target.closed&&!document.hidden&&document.hasFocus())void verify(true);},700);
+    poll=setInterval(()=>{if(!document.hidden)void check();},3000);
     target.location.href=url;
   });
 }
+
+async function refreshOnReturn(){
+  if(document.hidden||!getAccount()?.user.id)return;
+  if(checkConnection){void checkConnection();return;}
+  const previous=cached;if(!previous)return;
+  try{const status=await getSpotifyStatus(true);if(status.connected!==previous.connected||status.configured!==previous.configured||status.displayName!==previous.displayName)window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));}catch{}
+}
+window.addEventListener('focus',()=>{void refreshOnReturn();});
+document.addEventListener('visibilitychange',()=>{void refreshOnReturn();});
 
 function loadSDK(){
   if(window.Spotify?.Player)return Promise.resolve(window.Spotify);

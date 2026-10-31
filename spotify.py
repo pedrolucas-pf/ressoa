@@ -85,22 +85,29 @@ class Spotify:
         return dict(url='https://accounts.spotify.com/authorize?'+urlencode(dict(client_id=self.client_id,response_type='code',redirect_uri=redirect_uri,state=state,scope=scope,code_challenge_method='S256',code_challenge=challenge)))
 
     def finish(self,user_id,session,state,code,error=''):
-        if not self.configured or not user_id or not isinstance(state,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',state):
+        if not user_id or not session:raise APIError(400,'Sua sessão Ressoa não está disponível nesta aba. Abra o Ressoa no mesmo navegador, entre na conta e conecte o Spotify por lá.','SPOTIFY_SESSION_REQUIRED')
+        if not self.configured or not isinstance(state,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',state):
             raise APIError(400,'Essa conexão expirou. Volte ao Ressoa e tente novamente.')
         with self.db.transaction() as db:
             row=db.execute('''DELETE FROM spotify_oauth WHERE state_hash=? AND user_id=? AND session_hash=? AND expires_at>? RETURNING verifier,redirect_uri''',
                 (hashlib.sha256(state.encode()).hexdigest(),user_id,hashlib.sha256(session.encode()).hexdigest(),time.time())).fetchone()
         if not row:raise APIError(400,'Essa conexão expirou. Volte ao Ressoa e tente novamente.')
-        if error:raise APIError(400,'A conexão com Spotify foi cancelada.')
+        if error:raise APIError(400,'A conexão com Spotify foi cancelada.','SPOTIFY_AUTH_CANCELLED')
         code=text(code,1,2000)
         try:
             tokens=spotify_request('',method='POST',form=True,data=dict(grant_type='authorization_code',code=code,redirect_uri=row['redirect_uri'],client_id=self.client_id,code_verifier=row['verifier']))
             access,refresh,expires=self.validate_tokens(tokens)
-            profile=spotify_request('me',access)
-        except SpotifyHTTPError:
-            raise APIError(503,'O Spotify recusou a conexão. Confira o aplicativo e os usuários autorizados no painel.') from None
+        except SpotifyHTTPError as failure:
+            if failure.reason=='invalid_grant':raise APIError(400,'Essa autorização do Spotify expirou. Volte ao Ressoa e conecte novamente.','SPOTIFY_AUTH_REQUIRED') from None
+            if failure.status==429:raise APIError(429,'O Spotify está limitando as conexões. Aguarde um pouco e tente novamente.','SPOTIFY_RATE_LIMIT') from None
+            raise APIError(503,'O Spotify recusou a autorização do aplicativo. Confira o Client ID e o endereço de retorno no painel.','SPOTIFY_CONFIGURATION_ERROR') from None
+        try:profile=spotify_request('me',access)
+        except SpotifyHTTPError as failure:
+            if failure.status==403:
+                raise APIError(403,'O Spotify recusou o acesso desta conta. Em modo de desenvolvimento, o responsável pelo Ressoa precisa adicionar o e-mail da sua conta Spotify em Settings → Users Management, no painel do aplicativo.','SPOTIFY_ACCESS_DENIED') from None
+            if failure.status==429:raise APIError(429,'O Spotify está limitando as conexões. Aguarde um pouco e tente novamente.','SPOTIFY_RATE_LIMIT') from None
+            raise APIError(503,'Não foi possível conferir sua conta no Spotify agora. Volte ao Ressoa e tente novamente.','SPOTIFY_UNAVAILABLE') from None
         if not isinstance(profile,dict):raise APIError(503,'Não foi possível conferir a conta do Spotify.')
-        if profile.get('product') and profile['product']!='premium':raise APIError(403,'A reprodução completa exige uma conta Spotify Premium.')
         identifier=str(profile.get('id') or profile.get('account_id') or '')[:200]
         if not identifier:raise APIError(503,'Não foi possível identificar a conta do Spotify.')
         with self.db.transaction() as db:
