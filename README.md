@@ -150,9 +150,11 @@ A reprodução pelo SDK exige Spotify Premium. Aplicativos em desenvolvimento t�
 
 Em um aplicativo novo no modo de desenvolvimento, são permitidas até **cinco contas Spotify autorizadas**. No Dashboard, abra **Settings → Users Management → Add new user** e informe o nome e o e-mail usado no Spotify de cada pessoa de teste. Criar uma conta no Ressoa não inclui essa pessoa na lista do Spotify. Uma conta não autorizada pode fazer login no Spotify e ainda receber erro 403 ao concluir a conexão.
 
+O acesso sem essa lista exige aprovação para **Extended Quota Mode**. Atualmente, o Spotify aceita pedidos de organizações com serviço lançado e pelo menos 250 mil usuários ativos mensais, entre outros critérios. A integração de desenvolvimento serve para testes com as contas autorizadas; publicar o Ressoa não libera automaticamente a conexão Spotify para todos os visitantes. Essa limitação não impede o uso do diário e dos recursos sociais.
+
 A conexão fica vinculada à conta Ressoa no banco, podendo ser recuperada em outro dispositivo. Ao retornar da autorização no celular, o site também consulta a confirmação no servidor, sem depender apenas da comunicação entre abas. Se o navegador perder a referência à aba original, a página de retorno leva ao início do Ressoa. Contas sem Premium podem concluir a conexão para o catálogo quando autorizadas pelo Spotify; a exigência de Premium continua sendo verificada na reprodução.
 
-Alguns navegadores móveis exigem um toque no play para liberar o áudio. Desconectar o Spotify remove essa conexão, preservando a conta e as publicações no Ressoa. Se o domínio do site mudar, atualize também a URI de retorno no painel do Spotify.
+No iPhone, o primeiro play pode preparar o player e pedir um novo toque para liberar o áudio. Esse segundo toque ativa o player antes de solicitar a reprodução; os próximos trechos reutilizam essa ativação. Se o navegador não suportar o áudio protegido, abra o site diretamente no Safari atualizado. Desconectar o Spotify remove essa conexão, preservando a conta e as publicações no Ressoa. Se o domínio do site mudar, atualize também a URI de retorno no painel do Spotify.
 
 </details>
 

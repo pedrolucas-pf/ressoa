@@ -3,6 +3,7 @@ import { api, getAccount } from './session.js';
 let cached=null,statusJob=null,owner=null,notify=()=>{};
 let sdkJob=null,player=null,deviceId=null,playerJob=null,current=null,clock=null,revision=0;
 let playQueue=Promise.resolve(),popup=null,checkConnection=null;
+const activatedPlayers=new WeakSet();
 export const setSpotifyFeedback=callback=>{notify=callback;};
 
 function updateControls(status){
@@ -117,8 +118,8 @@ async function getPlayer(){
       instance.addListener('not_ready',()=>{if(player===instance){deviceId=null;stopSpotifyPlayback();}});
       instance.addListener('authentication_error',()=>fail('O Spotify não aceitou a conexão do player. Tente o play novamente; se continuar, desconecte e conecte sua conta.'));
       instance.addListener('account_error',()=>fail('Este trecho exige uma conta Spotify Premium.'));
-      instance.addListener('initialization_error',()=>fail('Este navegador não conseguiu iniciar o Spotify. Abra o Ressoa diretamente no Chrome ou Safari atualizado.'));
-      instance.addListener('autoplay_failed',()=>{if(player!==instance)return;stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('O navegador pausou o áudio. Toque no play para ouvir.');});
+      instance.addListener('initialization_error',()=>fail('Este navegador não conseguiu iniciar o áudio protegido do Spotify. No iPhone, abra o Ressoa diretamente no Safari atualizado, fora do aplicativo Google, Instagram ou WhatsApp.'));
+      instance.addListener('autoplay_failed',()=>{if(player!==instance)return;activatedPlayers.delete(instance);stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('O navegador pausou o áudio. Toque no play para ouvir.');});
       instance.addListener('playback_error',()=>{if(player!==instance)return;stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('O Spotify não conseguiu tocar esta faixa. Toque no play para tentar novamente ou escolha outra música.');});
       instance.addListener('player_state_changed',state=>{if(player===instance)readClipState(state);});
       instance.connect().then(connected=>{if(!connected)fail('Não foi possível conectar o player do Spotify.');}).catch(()=>fail('Não foi possível conectar o player do Spotify.'));
@@ -146,16 +147,34 @@ export function stopSpotifyPlayback(){
   const active=Boolean(current),instance=player;revision++;clearInterval(clock);clock=null;clearTimeout(current?.startTimer);current?.onState?.(false);current=null;
   if(active){const job=playQueue.catch(()=>{}).then(()=>instance?.pause());playQueue=job.catch(()=>{});}
 }
-function activateSpotifyPlayback(){try{player?.activateElement()?.catch(()=>{});}catch{}}
+function activateSpotifyPlayback(){
+  const instance=player;if(!instance)return null;
+  const gesture=navigator.userActivation?.isActive!==false;
+  let job;
+  // Keep this call in the original click handler, before any asynchronous work.
+  try{job=Promise.resolve(instance.activateElement());}catch(error){job=Promise.reject(error);}
+  if(gesture)job=job.then(()=>{if(player===instance)activatedPlayers.add(instance);});
+  void job.catch(()=>{});return {instance,job};
+}
+async function activateReadyPlayer(ready,activation){
+  const requireGesture=()=>Object.assign(new Error('Player pronto. Toque no play novamente para liberar o áudio neste navegador.'),{code:'SPOTIFY_GESTURE_REQUIRED'});
+  if(activation?.instance===ready.player){
+    try{await activation.job;}catch(error){if(error.name==='NotAllowedError')throw requireGesture();throw error;}
+  }
+  const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  if(ios&&!activatedPlayers.has(ready.player))throw requireGesture();
+  if(activation?.instance!==ready.player&&!activatedPlayers.has(ready.player))await ready.player.activateElement();
+}
 export function prepareSpotifyPlayback(){
-  activateSpotifyPlayback();return getSpotifyStatus().then(status=>status.connected?getPlayer():null);
+  const activation=activateSpotifyPlayback();
+  return Promise.all([activation?.job,getSpotifyStatus()]).then(([,status])=>status.connected?getPlayer():null);
 }
 export function playSpotifyExcerpt(track,excerpt,onState,onProgress){
-  activateSpotifyPlayback();
+  const activation=activateSpotifyPlayback();
   const token=++revision;
   const job=playQueue.catch(()=>{}).then(async()=>{
     if(token!==revision)return;
-    let ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();
+    let ready=await getPlayer();if(token!==revision)return;await activateReadyPlayer(ready,activation);if(token!==revision)return;
     const state=await ready.player.getCurrentState();if(token!==revision)return;
     const identifier=track.spotifyId||track.id,local=state?.track_window?.current_track?.id===identifier;
     const same=current?.trackId===identifier&&current.start===excerpt.start&&current.end===excerpt.end;
@@ -169,7 +188,7 @@ export function playSpotifyExcerpt(track,excerpt,onState,onProgress){
         try{await api('/api/spotify/play',{method:'POST',body:{trackId:identifier,deviceId:ready.deviceId,start:excerpt.start}});break;}
         catch(error){
           if(token!==revision)return;
-          if(error.code==='SPOTIFY_DEVICE_UNAVAILABLE'&&!attempt){releasePlayer(ready.player);ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();continue;}
+          if(error.code==='SPOTIFY_DEVICE_UNAVAILABLE'&&!attempt){releasePlayer(ready.player);ready=await getPlayer();if(token!==revision)return;await activateReadyPlayer(ready);if(token!==revision)return;continue;}
           await refreshConnection(error);throw error;
         }
       }
