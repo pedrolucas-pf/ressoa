@@ -82,7 +82,7 @@ async function getPlayer(){
       instance.addListener('authentication_error',()=>fail('Reconecte sua conta do Spotify.'));
       instance.addListener('account_error',()=>fail('Este trecho exige uma conta Spotify Premium.'));
       instance.addListener('initialization_error',()=>fail('Seu navegador não conseguiu iniciar o Spotify.'));
-      instance.addListener('autoplay_failed',()=>notify('Toque em ouvir novamente para iniciar o Spotify.'));
+      instance.addListener('autoplay_failed',()=>{stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('Toque no play para iniciar o Spotify.');});
       instance.addListener('player_state_changed',state=>{
         if(current&&state?.track_window?.current_track?.id===current.trackId){current.started=true;current.onState?.(!state.paused);if(state.position>=current.end*1000)void endClip();}
       });
@@ -100,8 +100,12 @@ export function stopSpotifyPlayback(){
   revision++;clearInterval(clock);clock=null;current?.onState?.(false);current=null;
   try{player?.pause()?.catch(()=>{});}catch{}
 }
+function activateSpotifyPlayback(){try{player?.activateElement()?.catch(()=>{});}catch{}}
+export function prepareSpotifyPlayback(){
+  activateSpotifyPlayback();return getSpotifyStatus().then(status=>status.connected?getPlayer():null);
+}
 export function playSpotifyExcerpt(track,excerpt,onState){
-  if(player)void player.activateElement();
+  activateSpotifyPlayback();
   const token=++revision;
   const job=playQueue.catch(()=>{}).then(async()=>{
     if(token!==revision)return;
