@@ -84,6 +84,7 @@
       <div id="people-search-panel" class="people-search-panel" hidden><p id="people-search-status" role="status"></p><div id="people-results" role="listbox" aria-label="Pessoas encontradas"></div></div>
     </div>
     <div class="header-actions">
+      <button type="button" class="icon-button spotify-shortcut" id="spotify-shortcut" data-spotify-shortcut aria-label="Conectar Spotify" title="Conectar Spotify" hidden><img src="assets/spotify-icon-white.svg" alt="" width="22" height="22"></button>
       <button class="icon-button notifications-button" id="notifications-button" aria-label="Notificações" aria-haspopup="dialog" aria-controls="notifications-dialog"><span aria-hidden="true"></span><span id="notification-count" class="notification-count" aria-hidden="true" hidden></span></button>
       <a class="icon-button profile-shortcut" href="#perfil" data-page="perfil" aria-label="Meu perfil" title="Meu perfil"><span class="profile-avatar" aria-hidden="true"></span></a>
     </div>
@@ -145,8 +146,8 @@
         <button type="button" class="icon-button" data-close="composer" aria-label="Fechar editor">×</button>
       </div>
       <div id="composer-track-picker" class="track-picker"></div>
-      <input type="hidden" name="lyricExcerpt" value=""><div id="entry-excerpt-choice" class="excerpt-choice"></div>
       <div id="entry-audio-choice"></div>
+      <input type="hidden" name="lyricExcerpt" value=""><div id="entry-excerpt-choice" class="excerpt-choice"></div>
       <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="6" placeholder="Se quiser, escreva aqui"></textarea></label>
       <label>Visibilidade<select name="visibility"><option value="private">Só no meu diário</option><option value="public">Pública</option></select></label>
       <p class="form-note" id="visibility-note">Salvo na sua conta. Respeitamos a visibilidade que você escolher.</p>
@@ -160,8 +161,8 @@
     </div>
     <form id="weekly-form">
       <div id="weekly-track-picker" class="track-picker"></div>
-      <input type="hidden" name="lyricExcerpt" value=""><div id="weekly-excerpt-choice" class="excerpt-choice"></div>
       <div id="weekly-audio-choice"></div>
+      <input type="hidden" name="lyricExcerpt" value=""><div id="weekly-excerpt-choice" class="excerpt-choice"></div>
       <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="4" placeholder="Se quiser, escreva aqui"></textarea></label>
       <p class="form-note">Uma escolha por semana.</p>
       <button class="button primary" type="submit">Definir</button>
@@ -170,6 +171,8 @@
   <dialog id="lyric-picker" aria-labelledby="lyric-picker-title">
     <div class="dialog-heading"><h2 id="lyric-picker-title">Trecho da letra</h2><button type="button" class="icon-button" data-close="lyric-picker" aria-label="Fechar trechos">×</button></div>
     <p class="form-note" id="lyric-track-name"></p><div id="lyric-preview" class="lyric-preview"></div>
+    <div class="lyric-audio-options" id="lyric-audio-options" hidden><label><input type="checkbox" id="lyric-sync-audio" checked> Sincronizar áudio e letra</label><button type="button" class="text-button" id="lyric-use-audio" hidden>Usar versos desse áudio</button></div>
+    <p class="form-note lyric-audio-note" id="lyric-audio-note" hidden></p>
     <p class="form-note" id="lyric-status" role="status"></p><div id="lyric-lines" class="lyric-lines"></div>
     <label class="lyric-field" for="lyric-selection">Trecho escolhido <span id="lyric-count">0/120</span></label>
     <textarea id="lyric-selection" maxlength="120" rows="3" placeholder="Até 3 versos"></textarea>

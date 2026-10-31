@@ -6,6 +6,11 @@ let playQueue=Promise.resolve(),popup=null;
 export const setSpotifyFeedback=callback=>{notify=callback;};
 
 function updateControls(status){
+  document.querySelectorAll('[data-spotify-shortcut]').forEach(button=>{
+    button.hidden=!status.configured;button.dataset.connected=String(status.connected);
+    const label=status.connected?'Spotify conectado · gerenciar conexão':'Conectar Spotify';
+    button.setAttribute('aria-label',label);button.title=label;
+  });
   document.querySelectorAll('[data-spotify-connection]').forEach(host=>{
     host.hidden=!status.configured;
     const label=host.querySelector('[data-spotify-status]');if(label)label.textContent=status.connected?`Spotify conectado${status.displayName?' · '+status.displayName:''}`:'Conecte seu Spotify Premium para escolher qualquer ponto da faixa.';
@@ -117,10 +122,14 @@ export function playSpotifyExcerpt(track,excerpt,onState){
 }
 
 document.addEventListener('click',async event=>{
-  const connect=event.target.closest('[data-connect-spotify]'),disconnect=event.target.closest('[data-disconnect-spotify]');
-  if(!connect&&!disconnect)return;event.preventDefault();const button=connect||disconnect;button.disabled=true;
+  const shortcut=event.target.closest('[data-spotify-shortcut]'),connect=event.target.closest('[data-connect-spotify]'),disconnect=event.target.closest('[data-disconnect-spotify]');
+  if(!shortcut&&!connect&&!disconnect)return;event.preventDefault();const button=shortcut||connect||disconnect;
+  if(shortcut?.dataset.connected==='true'){
+    const dialog=document.getElementById('spotify-dialog');if(dialog&&!dialog.open)dialog.showModal();return;
+  }
+  button.disabled=true;
   try{
-    if(connect)await connectSpotify();
+    if(connect||shortcut)await connectSpotify();
     else{stopSpotifyPlayback();player?.disconnect();player=null;deviceId=null;await api('/api/spotify/connection',{method:'DELETE',body:{}});const status=await getSpotifyStatus(true);window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));}
   }catch(error){notify(error.message);}finally{button.disabled=false;}
 });

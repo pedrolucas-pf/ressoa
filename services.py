@@ -18,7 +18,7 @@ class ServiceError(Exception):
     pass
 
 def _get(url, *, accept='application/json'):
-    request = Request(url, headers={'User-Agent': 'Ressoa/0.5 (local music journal)', 'Accept': accept})
+    request = Request(url, headers={'User-Agent': 'Ressoa/0.6 (https://ressoa.onrender.com)', 'Accept': accept})
     try:
         with urlopen(request, timeout=12) as response:
             return response.read(4_000_000).decode('utf-8')
@@ -159,6 +159,31 @@ def _normalize(value):
     value = re.sub(r'\s+-\s+(?:remix(?:ed)?|remaster(?:ed)?|original album).*$', '', value, flags=re.I)
     return ''.join(char for char in unicodedata.normalize('NFKD', value).casefold() if char.isalnum())
 
+def timed_lyrics(value, duration=0):
+    if not isinstance(value,str):return []
+    value=value[:180000]
+    # Do not infer timing for LRC files with a separate, unsupported offset.
+    if any(int(offset) for offset in re.findall(r'\[offset:([+-]?\d+)\]',value,re.I)):return []
+    stamp=r'\[(\d{1,4}):([0-5]\d)(?:[.:](\d{1,3}))?\]'
+    groups={}
+    for line in value.splitlines()[:2000]:
+        match=re.fullmatch('((?:'+stamp+r')+)(.*)',line.strip())
+        if not match:continue
+        content=match.group(5).strip()
+        for minute,second,fraction in re.findall(stamp,match.group(1)):
+            start=round(int(minute)*60+int(second)+(int(fraction)/10**len(fraction) if fraction else 0),3)
+            if start>86400 or (duration and start>duration):continue
+            groups.setdefault(start,[])
+            if content not in groups[start]:groups[start].append(content)
+        if len(groups)>=1200:break
+    times=sorted(groups);lines=[]
+    for index,start in enumerate(times):
+        end=times[index+1] if index+1<len(times) else duration if duration>start else None
+        for content in groups[start]:
+            if content and (not duration or start<duration):lines.append(dict(start=start,end=end,text=content))
+    return lines[:600]
+
+
 def lyrics(title, artist, album='', duration=0):
     if not title or not artist or max(len(title), len(artist), len(album)) > 240:
         raise ValueError('Música e artista são necessários.')
@@ -181,9 +206,11 @@ def lyrics(title, artist, album='', duration=0):
             return {'status': 'not_found'}
         if record.get('instrumental'):
             return {'status': 'instrumental', 'source': 'LRCLIB'}
-        text = record.get('plainLyrics') or re.sub(r'\[\d+:\d+(?:\.\d+)?\]', '', record.get('syncedLyrics') or '').strip()
+        record_duration=record.get('duration')
+        timeline=timed_lyrics(record.get('syncedLyrics'),record_duration if type(record_duration) in (int,float) and 0<record_duration<=86400 else duration)
+        text = record.get('plainLyrics') or re.sub(r'\[\d+:\d+(?:[.:]\d+)?\]|\[(?:offset|ar|ti|al|by|length|re|ve):[^\]]*\]', '', record.get('syncedLyrics') or '',flags=re.I).strip()
         if not text:
             return {'status': 'not_found'}
-        return {'status': 'found', 'text': text[:60000], 'source': 'LRCLIB',
+        return {'status': 'found', 'text': text[:60000], 'lines':timeline,'source': 'LRCLIB',
                 'sourceUrl': f"https://lrclib.net/api/get/{int(record['id'])}"}
     return _cached(('lyrics', title, artist, album, duration), fetch)

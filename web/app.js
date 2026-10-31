@@ -575,8 +575,12 @@ const composerPicker = createTrackPicker($('#composer-track-picker'), { ...picke
 const weeklyPicker = createTrackPicker($('#weekly-track-picker'), {...pickerOptions,onChange:index=>trackChanged('weekly',index)});
 const entryAudio=createAudioExcerpt({host:$('#entry-audio-choice'),musicDetails,stopPreview,onChange:persistDraft});
 const weeklyAudio=createAudioExcerpt({host:$('#weekly-audio-choice'),musicDetails,stopPreview});
-const lyricPicker=createLyricPicker({dialog:$('#lyric-picker'),api,tracks,musicDetails,onSelect(scope,value){
- const target=scope==='weekly'?$('#weekly-form'):form;target.elements.lyricExcerpt.value=value;renderExcerptChoice(scope);if(scope==='entry')persistDraft();
+const lyricPicker=createLyricPicker({dialog:$('#lyric-picker'),api,tracks,musicDetails,async onSelect(scope,value,{track,audioStart}){
+ const target=scope==='weekly'?$('#weekly-form'):form,picker=scope==='weekly'?weeklyPicker:composerPicker,audio=scope==='weekly'?weeklyAudio:entryAudio;
+ if(picker.value!==track)throw new Error('A música mudou. Abra a letra novamente.');
+ if(audioStart!==null&&!await audio.alignTo(audioStart))throw new Error('Não foi possível ajustar o áudio. Tente novamente ou desative a sincronização.');
+ if(picker.value!==track)throw new Error('A música mudou. Abra a letra novamente.');
+ target.elements.lyricExcerpt.value=value;renderExcerptChoice(scope);if(scope==='entry')persistDraft();
 }});
 function trackChanged(scope,index) {
  (scope==='weekly'?weeklyAudio:entryAudio).set(index);
@@ -593,7 +597,7 @@ document.addEventListener('click',event=>{
  const choose=event.target.closest('[data-choose-excerpt]'),remove=event.target.closest('[data-remove-excerpt]');if(!choose&&!remove)return;
  const scope=(choose||remove).dataset[choose?'chooseExcerpt':'removeExcerpt'],target=scope==='weekly'?$('#weekly-form'):form,picker=scope==='weekly'?weeklyPicker:composerPicker;
  if(remove){target.elements.lyricExcerpt.value='';renderExcerptChoice(scope);if(scope==='entry')persistDraft();return;}
- if(picker.requireSelection())lyricPicker.open({scope,track:picker.value,excerpt:target.elements.lyricExcerpt.value});
+ if(picker.requireSelection())lyricPicker.open({scope,track:picker.value,excerpt:target.elements.lyricExcerpt.value,audio:(scope==='weekly'?weeklyAudio:entryAudio).value});
 });
 
 function openComposer(id = null) {

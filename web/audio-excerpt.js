@@ -93,7 +93,11 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
   reset.addEventListener('click',()=>{stop();value=null;configure(limit);onChange?.();});
   window.addEventListener('spotifychange',()=>{if(!full)return;generation++;stop();loaded=false;loading=null;controls.hidden=true;if(details.open)void load();});
   document.addEventListener('ressoaplaybackstop',stop);
-  return {get value(){return value?{...value}:null;},stop,set(track,excerpt=null){
+  return {get value(){return value?{...value}:null;},stop,async alignTo(start){
+    if(!Number.isFinite(start)||start<0||musicDetails[index]?.provider!=='spotify')return false;
+    const token=generation;await load();if(token!==generation||!loaded||!full)return false;
+    stop();span=Math.min(30,limit);position=Math.max(0,Math.min(start,limit-span));value=selection();configure(limit);details.open=true;onChange?.();return true;
+  },set(track,excerpt=null){
     generation++;stop();index=track;loaded=false;loading=null;full=musicDetails[track]?.provider==='spotify';limit=30;span=30;position=0;connect.hidden=true;
     value=excerpt?{...excerpt}:null;audio.removeAttribute('src');audio.load();controls.hidden=true;
     note.textContent=track===null?'Escolha uma música primeiro.':'Arraste para escolher o trecho de áudio.';

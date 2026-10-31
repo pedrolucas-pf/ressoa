@@ -29,6 +29,7 @@ svg { width: 20px; height: 20px; display: block; fill: none; stroke: currentColo
 .header-controls .main-nav {align-self:stretch;gap:28px;flex-shrink:0;}
 .header-controls .main-nav a {padding:0;white-space:nowrap;}
 .header-actions {display:flex;align-items:center;gap:4px;}
+.spotify-shortcut{border:1px solid transparent;opacity:.7;}.spotify-shortcut img{width:22px;height:22px;object-fit:contain;}.spotify-shortcut[data-connected="true"]{opacity:1;border-color:var(--border);background:var(--surface);}.spotify-shortcut:hover{opacity:1;}
 .header-actions .notifications-button {margin-left:0;}
 .profile-shortcut {color:var(--muted);border:1px solid transparent;}
 .profile-shortcut[aria-current="page"] {color:var(--text);border-color:var(--border);background:var(--surface);}
@@ -367,6 +368,7 @@ form .picker-search input.catalog-query { min-width: 0; margin: 0; padding: 12px
 .lyric-lines {max-height:220px;overflow:auto;margin:16px 0;scrollbar-width:thin;}
 .lyric-line {display:block;width:100%;text-align:left;padding:10px 12px;border:1px solid transparent;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;}
 .lyric-line:hover,.lyric-line[aria-pressed="true"] {background:var(--surface);border-color:var(--border);}
+.lyric-line.in-audio{border-left-color:#a9a9a9;}.lyric-line.has-time{display:flex;align-items:baseline;gap:14px;}.lyric-line.has-time>span{flex:1;}.lyric-line time{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;}.lyric-audio-options{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:18px;}.lyric-audio-options label{display:flex;align-items:center;gap:8px;font-size:11px;}.lyric-audio-options .text-button{font-size:11px;}.lyric-audio-note{margin-top:10px;}
 .lyric-field {display:flex;justify-content:space-between;font-size:12px;margin-top:20px;}
 .lyric-field span {color:var(--muted);}
 .excerpt-choice {margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
@@ -695,6 +697,7 @@ body.profile-background::before {content:'';position:fixed;inset:0;z-index:-1;ba
  .header-controls .main-nav{width:auto;order:0;margin-top:0;border-bottom:0;gap:20px;}
  .header-controls .main-nav a{font-size:12px;padding:10px 0 12px;}
  .header-actions{gap:2px;}
+ .header-actions .icon-button{width:36px;height:36px;}
  .people-search{position:static;flex:0 0 36px;min-width:0;}
  #toggle-people-search{display:inline-grid;width:36px;}
  .people-search-field{display:none;position:absolute;left:0;right:0;top:calc(100% + 10px);min-height:42px;padding:9px 12px;box-shadow:0 10px 25px #0006;}
@@ -707,3 +710,4 @@ body.profile-background::before {content:'';position:fixed;inset:0;z-index:-1;ba
  .story .read-more{margin-top:4px;font-size:11px;line-height:18px;}
  .profile-follow{font-size:11px;padding:9px 16px;min-width:100px;}
 }
+@media(max-width:360px){.header-controls{gap:5px;}.header-controls .main-nav{gap:13px;}}
