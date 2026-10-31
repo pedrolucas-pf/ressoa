@@ -147,6 +147,6 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
     generation++;cancel();setProgress(0);index=track;loaded=false;loading=null;full=musicDetails[track]?.provider==='spotify';limit=30;span=30;position=0;connect.hidden=true;
     value=excerpt?{...excerpt}:null;audio.removeAttribute('src');audio.load();controls.hidden=true;
     note.textContent=track===null?'Escolha uma música primeiro.':'Arraste para escolher o trecho de áudio.';
-    prepare();if(details.open)void loadAndPlay();
+    if(details.open){prepare();void loadAndPlay();}
   }};
 }

@@ -53,6 +53,8 @@ Contas privadas permitem controlar quem vê suas publicações. As permissões d
 
 A escolha de qualquer ponto da faixa usa o Spotify conectado; cada ouvinte precisa da própria conta Premium para reproduzir esse áudio. As prévias Deezer funcionam sem conectar uma conta externa. Capas, letras e áudio dependem da disponibilidade de cada gravação.
 
+Conectar a conta, buscar uma música ou navegar pelo feed não inicia o player Spotify. A reprodução da faixa completa usa o Spotify Connect no dispositivo criado pelo navegador do Ressoa; por isso, pode aparecer também no aplicativo Spotify. O aplicativo não precisa estar aberto. Quando a faixa já está carregada no player do navegador, a reprodução é retomada por ele, sem reenviar a ordem de carregamento pela API.
+
 ## Tecnologias
 
 | Camada | Implementação |

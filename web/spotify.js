@@ -13,7 +13,7 @@ function updateControls(status){
   });
   document.querySelectorAll('[data-spotify-connection]').forEach(host=>{
     host.hidden=!status.configured;
-    const label=host.querySelector('[data-spotify-status]');if(label)label.textContent=status.connected?`Spotify conectado${status.displayName?' · '+status.displayName:''}`:'Conecte seu Spotify Premium para escolher qualquer ponto da faixa.';
+    const label=host.querySelector('[data-spotify-status]');if(label)label.textContent=status.connected?`Spotify conectado${status.displayName?' · '+status.displayName:''}`:'Conecte sua conta Spotify para buscar músicas.';
     host.querySelectorAll('[data-connect-spotify]').forEach(button=>{button.hidden=status.connected;button.textContent='Conectar Spotify';});
     host.querySelectorAll('[data-disconnect-spotify]').forEach(button=>button.hidden=!status.connected);
   });
@@ -106,18 +106,19 @@ function readClipState(state){
   // A seek can briefly report the position of the previously selected excerpt.
   if(!clip.started&&age<10000&&(state.position<clip.start*1000-250||state.position>clip.start*1000+age+2000))return;
   clip.started=true;clip.onState?.(!state.paused);
+  if(!state.paused&&state.position>clip.start*1000+100){clip.advanced=true;clearTimeout(clip.startTimer);}
   if(!clip.ending)clip.onProgress?.(Math.max(0,Math.min(clip.end-clip.start,state.position/1000-clip.start)));
   if(state.position>=clip.end*1000)void endClip();
 }
 async function endClip(){
   if(!current||current.ending)return;
-  const clip=current;clip.ending=true;clip.finished=true;clip.onProgress?.(clip.end-clip.start);clearInterval(clock);clock=null;
+  const clip=current;clip.ending=true;clip.finished=true;clearTimeout(clip.startTimer);clip.onProgress?.(clip.end-clip.start);clearInterval(clock);clock=null;
   const job=playQueue.catch(()=>{}).then(async()=>{if(current!==clip)return;await player?.pause();if(current===clip)await player?.seek(clip.start*1000);});playQueue=job.catch(()=>{});
   try{await job;}catch{stopSpotifyPlayback();}finally{if(current===clip){clip.onState?.(false);clip.ending=false;}}
 }
 export function stopSpotifyPlayback(){
-  revision++;clearInterval(clock);clock=null;current?.onState?.(false);current=null;
-  try{player?.pause()?.catch(()=>{});}catch{}
+  const active=Boolean(current),instance=player;revision++;clearInterval(clock);clock=null;clearTimeout(current?.startTimer);current?.onState?.(false);current=null;
+  if(active){const job=playQueue.catch(()=>{}).then(()=>instance?.pause());playQueue=job.catch(()=>{});}
 }
 function activateSpotifyPlayback(){try{player?.activateElement()?.catch(()=>{});}catch{}}
 export function prepareSpotifyPlayback(){
@@ -129,19 +130,27 @@ export function playSpotifyExcerpt(track,excerpt,onState,onProgress){
   const job=playQueue.catch(()=>{}).then(async()=>{
     if(token!==revision)return;
     let ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();
-    const same=current?.trackId===track.spotifyId&&current.start===excerpt.start&&current.end===excerpt.end;
-    if(same){const state=await player.getCurrentState();if(state&&!state.paused){clearInterval(clock);clock=null;await player.pause();onState?.(false);return;}}
-    clearInterval(clock);clock=null;current?.onState?.(false);current=null;
-    for(let attempt=0;attempt<2;attempt++){
-      try{await api('/api/spotify/play',{method:'POST',body:{trackId:track.spotifyId||track.id,deviceId:ready.deviceId,start:excerpt.start}});break;}
-      catch(error){
-        if(token!==revision)return;
-        if(error.code==='SPOTIFY_DEVICE_UNAVAILABLE'&&!attempt){releasePlayer(ready.player);ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();continue;}
-        await refreshConnection(error);throw error;
+    const state=await ready.player.getCurrentState();if(token!==revision)return;
+    const identifier=track.spotifyId||track.id,local=state?.track_window?.current_track?.id===identifier;
+    const same=current?.trackId===identifier&&current.start===excerpt.start&&current.end===excerpt.end;
+    if(same&&local&&!state.paused){clearInterval(clock);clock=null;clearTimeout(current.startTimer);await ready.player.pause();onState?.(false);return;}
+    clearInterval(clock);clock=null;clearTimeout(current?.startTimer);current?.onState?.(false);current=null;
+    if(local){
+      // A loaded browser player can restart locally, without another Connect play request.
+      await ready.player.seek(excerpt.start*1000);if(token!==revision)return;await ready.player.resume();
+    }else{
+      for(let attempt=0;attempt<2;attempt++){
+        try{await api('/api/spotify/play',{method:'POST',body:{trackId:identifier,deviceId:ready.deviceId,start:excerpt.start}});break;}
+        catch(error){
+          if(token!==revision)return;
+          if(error.code==='SPOTIFY_DEVICE_UNAVAILABLE'&&!attempt){releasePlayer(ready.player);ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();continue;}
+          await refreshConnection(error);throw error;
+        }
       }
     }
     if(token!==revision){await ready.player.pause();return;}
-    current={trackId:track.spotifyId||track.id,start:excerpt.start,end:excerpt.end,onState,onProgress,ending:false,started:false,requestedAt:Date.now()};onProgress?.(0);onState?.(true);
+    const clip={trackId:identifier,start:excerpt.start,end:excerpt.end,onState,onProgress,ending:false,started:false,advanced:false,requestedAt:Date.now()};current=clip;onProgress?.(0);onState?.(true);
+    clip.startTimer=setTimeout(()=>{if(current!==clip||clip.advanced)return;stopSpotifyPlayback();notify('O áudio não começou neste navegador. Toque no play para tentar novamente.');},12000);
     let checking=false;
     clock=setInterval(async()=>{
       if(checking||!current||token!==revision)return;checking=true;
