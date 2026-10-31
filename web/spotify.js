@@ -4,6 +4,7 @@ let cached=null,statusJob=null,owner=null,notify=()=>{};
 let sdkJob=null,player=null,deviceId=null,playerJob=null,current=null,clock=null,revision=0;
 let playQueue=Promise.resolve(),popup=null,checkConnection=null;
 const activatedPlayers=new WeakSet();
+const publicConnectionsPaused=true;
 export const setSpotifyFeedback=callback=>{notify=callback;};
 
 function updateControls(status){
@@ -41,6 +42,7 @@ export async function getSpotifyStatus(force=false){
 }
 
 export async function connectSpotify(){
+  if(publicConnectionsPaused){notify('Aguarde! Estamos preparando a liberação da conexão com o Spotify.');return;}
   if(popup&&!popup.closed){popup.focus();return;}
   const account=getAccount()?.user.id;
   popup=window.open('about:blank','ressoa-spotify','popup,width=520,height=720');
