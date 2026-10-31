@@ -26,6 +26,7 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
   if (!response.ok) {
     const error = new Error(data.error || 'Não foi possível concluir. Tente novamente.');
     error.status = response.status;
+    error.code = data.code;
     if (response.status === 401 && !['/api/login', '/api/register'].includes(path)) window.dispatchEvent(new Event('sessionexpired'));
     throw error;
   }

@@ -123,7 +123,7 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
       note.textContent='Arraste e solte para ouvir.';connect.hidden=true;
       value=selection();onChange?.();sdkActive=true;
       try{await playSpotifyExcerpt(musicDetails[index],value,playing=>{if(token===generation&&attempt===playGeneration)showPlaying(playing);},seconds=>{if(token===generation&&attempt===playGeneration)setProgress(seconds);});}
-      catch(error){if(token===generation&&attempt===playGeneration){sdkActive=false;showPlaying(false);note.textContent=error.message;connect.hidden=false;}}
+      catch(error){if(token===generation&&attempt===playGeneration){sdkActive=false;showPlaying(false);note.textContent=error.message;connect.hidden=error.code!=='SPOTIFY_AUTH_REQUIRED';}}
       finally{if(token===generation&&attempt===playGeneration){pendingPlay=false;listen.removeAttribute('aria-busy');}}
       return;
     }

@@ -14,9 +14,17 @@ function updateControls(status){
   document.querySelectorAll('[data-spotify-connection]').forEach(host=>{
     host.hidden=!status.configured;
     const label=host.querySelector('[data-spotify-status]');if(label)label.textContent=status.connected?`Spotify conectado${status.displayName?' · '+status.displayName:''}`:'Conecte seu Spotify Premium para escolher qualquer ponto da faixa.';
-    host.querySelectorAll('[data-connect-spotify]').forEach(button=>{button.hidden=false;button.textContent=status.connected?'Reconectar Spotify':'Conectar Spotify';});
+    host.querySelectorAll('[data-connect-spotify]').forEach(button=>{button.hidden=status.connected;button.textContent='Conectar Spotify';});
     host.querySelectorAll('[data-disconnect-spotify]').forEach(button=>button.hidden=!status.connected);
   });
+}
+async function refreshConnection(error){
+  if(error.code!=='SPOTIFY_AUTH_REQUIRED')return;
+  try{const status=await getSpotifyStatus(true);window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));}catch{}
+}
+function releasePlayer(instance=player){
+  if(player===instance){player=null;deviceId=null;}
+  try{instance?.disconnect();}catch{}
 }
 export async function getSpotifyStatus(force=false){
   const user=getAccount()?.user.id;
@@ -24,7 +32,9 @@ export async function getSpotifyStatus(force=false){
   if(cached&&!force)return cached;
   if(statusJob){if(!force)return statusJob;await statusJob.catch(()=>{});}
   statusJob=api('/api/spotify/status').then(status=>{
-    if(owner!==user)return {configured:false,connected:false};cached=status;updateControls(status);return status;
+    if(owner!==user)return {configured:false,connected:false};cached=status;
+    if(!status.connected&&player){stopSpotifyPlayback();releasePlayer();}
+    updateControls(status);return status;
   }).finally(()=>{statusJob=null;});
   return statusJob;
 }
@@ -69,24 +79,25 @@ async function getPlayer(){
   if(playerJob)return playerJob;
   playerJob=(async()=>{
     const status=await getSpotifyStatus();
-    if(!status.connected){const dialog=document.getElementById('spotify-dialog');if(status.configured&&dialog&&!dialog.open)dialog.showModal();throw new Error('Conecte sua conta Spotify Premium para ouvir este trecho.');}
-    const account=owner,sdk=await loadSDK();if(owner!==account)throw new Error('A conta mudou. Tente novamente.');player?.disconnect();
+    if(!status.connected){const dialog=document.getElementById('spotify-dialog');if(status.configured&&dialog&&!dialog.open)dialog.showModal();throw Object.assign(new Error('Conecte sua conta Spotify para ouvir este trecho.'),{code:'SPOTIFY_AUTH_REQUIRED'});}
+    const account=owner,sdk=await loadSDK();if(owner!==account)throw new Error('A conta mudou. Tente novamente.');releasePlayer();
     return await new Promise((resolve,reject)=>{
-      const instance=new sdk.Player({name:'Ressoa',volume:.5,getOAuthToken:callback=>{api('/api/spotify/token').then(data=>{if(owner===account&&getAccount()?.user.id===account)callback(data.accessToken);else instance.disconnect();}).catch(()=>fail('Reconecte sua conta do Spotify.'));}});
+      const instance=new sdk.Player({name:'Ressoa',volume:.5,getOAuthToken:callback=>{api('/api/spotify/token').then(data=>{if(player===instance&&owner===account&&getAccount()?.user.id===account)callback(data.accessToken);else instance.disconnect();}).catch(error=>{void refreshConnection(error);fail(error.message);});}});
       player=instance;
-      let settled=false;
-      const timer=setTimeout(()=>{instance.disconnect();if(player===instance){player=null;deviceId=null;}reject(new Error('O dispositivo do Spotify não ficou pronto. Tente novamente.'));},20000);
-      const fail=message=>{clearTimeout(timer);instance.disconnect();if(player===instance){stopSpotifyPlayback();player=null;deviceId=null;}if(settled)notify(message);else reject(new Error(message));};
+      let settled=false,failed=false;
+      const fail=message=>{if(failed)return;failed=true;clearTimeout(timer);const active=player===instance;if(active)stopSpotifyPlayback();releasePlayer(instance);if(settled){if(active)notify(message);}else reject(new Error(message));};
+      const timer=setTimeout(()=>fail('O player do Spotify demorou para conectar. Confira sua conexão e toque no play novamente.'),20000);
       instance.addListener('ready',event=>{clearTimeout(timer);if(player!==instance)return;deviceId=event.device_id;settled=true;resolve({player:instance,deviceId});});
       instance.addListener('not_ready',()=>{if(player===instance){deviceId=null;stopSpotifyPlayback();}});
-      instance.addListener('authentication_error',()=>fail('Reconecte sua conta do Spotify.'));
+      instance.addListener('authentication_error',()=>fail('O Spotify não aceitou a conexão do player. Tente o play novamente; se continuar, desconecte e conecte sua conta.'));
       instance.addListener('account_error',()=>fail('Este trecho exige uma conta Spotify Premium.'));
-      instance.addListener('initialization_error',()=>fail('Seu navegador não conseguiu iniciar o Spotify.'));
-      instance.addListener('autoplay_failed',()=>{stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('Toque no play para iniciar o Spotify.');});
-      instance.addListener('player_state_changed',readClipState);
+      instance.addListener('initialization_error',()=>fail('Este navegador não conseguiu iniciar o Spotify. Abra o Ressoa diretamente no Chrome ou Safari atualizado.'));
+      instance.addListener('autoplay_failed',()=>{if(player!==instance)return;stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('O navegador pausou o áudio. Toque no play para ouvir.');});
+      instance.addListener('playback_error',()=>{if(player!==instance)return;stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('O Spotify não conseguiu tocar esta faixa. Toque no play para tentar novamente ou escolha outra música.');});
+      instance.addListener('player_state_changed',state=>{if(player===instance)readClipState(state);});
       instance.connect().then(connected=>{if(!connected)fail('Não foi possível conectar o player do Spotify.');}).catch(()=>fail('Não foi possível conectar o player do Spotify.'));
     });
-  })().finally(()=>{playerJob=null;});return playerJob;
+  })();const job=playerJob;void job.finally(()=>{if(playerJob===job)playerJob=null;}).catch(()=>{});return job;
 }
 function readClipState(state){
   const clip=current;if(!clip||state?.track_window?.current_track?.id!==clip.trackId||!Number.isFinite(state.position))return;
@@ -117,11 +128,18 @@ export function playSpotifyExcerpt(track,excerpt,onState,onProgress){
   const token=++revision;
   const job=playQueue.catch(()=>{}).then(async()=>{
     if(token!==revision)return;
-    const ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();
+    let ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();
     const same=current?.trackId===track.spotifyId&&current.start===excerpt.start&&current.end===excerpt.end;
     if(same){const state=await player.getCurrentState();if(state&&!state.paused){clearInterval(clock);clock=null;await player.pause();onState?.(false);return;}}
     clearInterval(clock);clock=null;current?.onState?.(false);current=null;
-    await api('/api/spotify/play',{method:'POST',body:{trackId:track.spotifyId||track.id,deviceId:ready.deviceId,start:excerpt.start}});
+    for(let attempt=0;attempt<2;attempt++){
+      try{await api('/api/spotify/play',{method:'POST',body:{trackId:track.spotifyId||track.id,deviceId:ready.deviceId,start:excerpt.start}});break;}
+      catch(error){
+        if(token!==revision)return;
+        if(error.code==='SPOTIFY_DEVICE_UNAVAILABLE'&&!attempt){releasePlayer(ready.player);ready=await getPlayer();if(token!==revision)return;await ready.player.activateElement();continue;}
+        await refreshConnection(error);throw error;
+      }
+    }
     if(token!==revision){await ready.player.pause();return;}
     current={trackId:track.spotifyId||track.id,start:excerpt.start,end:excerpt.end,onState,onProgress,ending:false,started:false,requestedAt:Date.now()};onProgress?.(0);onState?.(true);
     let checking=false;
@@ -142,6 +160,6 @@ document.addEventListener('click',async event=>{
   button.disabled=true;
   try{
     if(connect||shortcut)await connectSpotify();
-    else{stopSpotifyPlayback();player?.disconnect();player=null;deviceId=null;await api('/api/spotify/connection',{method:'DELETE',body:{}});const status=await getSpotifyStatus(true);window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));}
+    else{await api('/api/spotify/connection',{method:'DELETE',body:{}});stopSpotifyPlayback();releasePlayer();const status=await getSpotifyStatus(true);window.dispatchEvent(new CustomEvent('spotifychange',{detail:status}));}
   }catch(error){notify(error.message);}finally{button.disabled=false;}
 });

@@ -1,6 +1,6 @@
 ﻿// Public Spotify iFrame API and native previews share one playback lifecycle.
 import { ensureTrackDetails, trackSummary } from './track-context.js';
-import { playSpotifyExcerpt, stopSpotifyPlayback, setSpotifyFeedback } from './spotify.js';
+import { playSpotifyExcerpt, stopSpotifyPlayback, setSpotifyFeedback, prepareSpotifyPlayback } from './spotify.js';
 let spotifyAPI;
 function loadSpotifyAPI() {
   if (spotifyAPI) return spotifyAPI;
@@ -68,6 +68,7 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     coverButton=button;
     state(button, false);
     if(detail.provider==='spotify'&&excerpt?.source==='spotify'){
+      void prepareSpotifyPlayback().catch(()=>{});
       coverToggle=event=>{event.stopPropagation();button.setAttribute('aria-busy','true');void playSpotifyExcerpt(detail,excerpt,playing=>state(button,playing)).catch(error=>toast(error.message)).finally(()=>button.removeAttribute('aria-busy'));};
       return;
     }

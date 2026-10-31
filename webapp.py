@@ -65,6 +65,7 @@ class Application:
             headers.extend(extra)
         except APIError as error:
             status, body = error.status, dict(error=error.message)
+            if error.code:body['code']=error.code
         except (ValueError, TypeError, KeyError, AttributeError):
             status, body = 400, dict(error='Dados inválidos. Confira os campos e tente novamente.')
         except ServiceError as error:

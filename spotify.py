@@ -15,7 +15,7 @@ from database import APIError,clean_track,text
 
 
 class SpotifyHTTPError(Exception):
-    def __init__(self,status):self.status=status
+    def __init__(self,status,reason=''):self.status,self.reason=status,reason
 
 
 def spotify_request(path,token=None,method='GET',data=None,form=False):
@@ -30,7 +30,20 @@ def spotify_request(path,token=None,method='GET',data=None,form=False):
         with urlopen(Request(url,headers=headers,data=body,method=method),timeout=15) as response:
             raw=response.read(2_000_000)
             return json.loads(raw) if raw else {}
-    except HTTPError as error:raise SpotifyHTTPError(error.code) from None
+    except HTTPError as error:
+        reason=''
+        try:
+            payload=json.loads(error.read(16000));detail=payload.get('error')
+            if isinstance(detail,dict):
+                reason=detail.get('reason','');message=str(detail.get('message','')).lower()
+                if not reason:
+                    for phrase,value in (('premium required','PREMIUM_REQUIRED'),('no active device','NO_ACTIVE_DEVICE'),('device not found','DEVICE_NOT_FOUND'),('insufficient client scope','INSUFFICIENT_SCOPE')):
+                        if phrase in message:reason=value;break
+            elif detail=='invalid_grant':reason='invalid_grant'
+            if reason not in ('PREMIUM_REQUIRED','NO_ACTIVE_DEVICE','DEVICE_NOT_FOUND','INSUFFICIENT_SCOPE','RESTRICTION_VIOLATED','TRACK_NOT_PLAYABLE','invalid_grant'):reason=''
+        except (OSError,ValueError,TypeError,AttributeError):pass
+        finally:error.close()
+        raise SpotifyHTTPError(error.code,reason) from None
     except (OSError,ValueError):raise APIError(503,'O Spotify não respondeu. Tente novamente.') from None
 
 
@@ -106,18 +119,28 @@ class Spotify:
             raise APIError(503,'O Spotify não devolveu uma autorização válida.')
         return access,refresh,time.time()+expires
 
-    def token(self,user_id):
+    def expire_connection(self,user_id,access):
+        # Do not remove a newer connection established while a request was in flight.
+        with self.db.transaction() as db:
+            db.execute('DELETE FROM spotify_connections WHERE user_id=? AND client_id=? AND access_token=?',(user_id,self.client_id,access))
+
+    def token(self,user_id,rejected_token=None):
         row=self.connection(user_id)
-        if not row:raise APIError(403,'Conecte sua conta Spotify Premium para usar esta função.')
-        if row['expires_at']>time.time()+60:return row['access_token']
+        if not row:raise APIError(403,'Conecte sua conta Spotify para ouvir este trecho.','SPOTIFY_AUTH_REQUIRED')
+        if row['expires_at']>time.time()+60 and row['access_token']!=rejected_token:return row['access_token']
         with self.lock:
             row=self.connection(user_id)
-            if not row:raise APIError(403,'Reconecte sua conta do Spotify.')
-            if row['expires_at']>time.time()+60:return row['access_token']
+            if not row:raise APIError(403,'Conecte sua conta Spotify para ouvir este trecho.','SPOTIFY_AUTH_REQUIRED')
+            if row['expires_at']>time.time()+60 and row['access_token']!=rejected_token:return row['access_token']
             try:
                 data=spotify_request('',method='POST',form=True,data=dict(grant_type='refresh_token',refresh_token=row['refresh_token'],client_id=self.client_id))
                 access,refresh,expires=self.validate_tokens(data,row['refresh_token'])
-            except SpotifyHTTPError:raise APIError(403,'Sua autorização do Spotify expirou. Conecte novamente.') from None
+            except SpotifyHTTPError as error:
+                if error.reason=='invalid_grant':
+                    self.expire_connection(user_id,row['access_token'])
+                    raise APIError(403,'A conexão com Spotify expirou. Use Conectar Spotify para autorizar novamente.','SPOTIFY_AUTH_REQUIRED') from None
+                if error.status==429:raise APIError(429,'O Spotify está limitando as consultas. Aguarde um pouco.','SPOTIFY_RATE_LIMIT') from None
+                raise APIError(503,'Não foi possível renovar o acesso ao Spotify agora. Tente novamente em instantes.','SPOTIFY_UNAVAILABLE') from None
             with self.db.transaction() as db:
                 changed=db.execute('''UPDATE spotify_connections SET access_token=?,refresh_token=?,expires_at=?
                     WHERE user_id=? AND client_id=? AND refresh_token=? RETURNING user_id''',(access,refresh,expires,user_id,self.client_id,row['refresh_token'])).fetchone()
@@ -125,11 +148,23 @@ class Spotify:
             return access
 
     def request(self,user_id,path,method='GET',data=None):
-        try:return spotify_request(path,self.token(user_id),method,data)
-        except SpotifyHTTPError as error:
-            if error.status==401:raise APIError(403,'Reconecte sua conta do Spotify.') from None
-            if error.status==429:raise APIError(429,'O Spotify está limitando as consultas. Aguarde um pouco.') from None
-            raise APIError(503,'O Spotify não conseguiu concluir. Confira sua conta Premium e a autorização do aplicativo.') from None
+        access=self.token(user_id)
+        for attempt in range(2):
+            try:return spotify_request(path,access,method,data)
+            except SpotifyHTTPError as error:
+                if error.status==401:
+                    if not attempt:access=self.token(user_id,rejected_token=access);continue
+                    self.expire_connection(user_id,access)
+                    raise APIError(403,'A conexão com Spotify expirou. Use Conectar Spotify para autorizar novamente.','SPOTIFY_AUTH_REQUIRED') from None
+                if error.status==429:raise APIError(429,'O Spotify está limitando as consultas. Aguarde um pouco.','SPOTIFY_RATE_LIMIT') from None
+                if path.startswith('me/player/play') and (error.status==404 or error.reason in ('NO_ACTIVE_DEVICE','DEVICE_NOT_FOUND')):
+                    raise APIError(409,'O player perdeu a conexão com Spotify. Toque no play para tentar novamente.','SPOTIFY_DEVICE_UNAVAILABLE') from None
+                if error.reason=='PREMIUM_REQUIRED':raise APIError(403,'A conta Spotify conectada precisa ter Premium para reproduzir este trecho.','SPOTIFY_PREMIUM_REQUIRED') from None
+                if error.reason=='INSUFFICIENT_SCOPE':raise APIError(403,'Faltou permitir a reprodução no Spotify. Desconecte e conecte sua conta para autorizar.','SPOTIFY_PERMISSION_REQUIRED') from None
+                if error.reason in ('RESTRICTION_VIOLATED','TRACK_NOT_PLAYABLE'):raise APIError(403,'O Spotify não permite reproduzir esta faixa nessa conta. Tente outra música.','SPOTIFY_TRACK_UNAVAILABLE') from None
+                if error.status==403:raise APIError(403,'O Spotify recusou o acesso. Confira se essa conta está autorizada no aplicativo Ressoa.','SPOTIFY_ACCESS_DENIED') from None
+                if error.status==404:raise APIError(404,'Esta faixa não está disponível no Spotify.','SPOTIFY_TRACK_UNAVAILABLE') from None
+                raise APIError(503,'O Spotify está indisponível no momento. Tente novamente em instantes.','SPOTIFY_UNAVAILABLE') from None
 
     def search(self,user_id,query,offset=0):
         query=text(query,2,180)
