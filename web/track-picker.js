@@ -1,18 +1,20 @@
 ﻿import { tracks, musicDetails, registerTrack, sanitizeTrack } from './catalog-store.js';
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 import { trackSummary } from './track-context.js';
+import { getSpotifyStatus, connectSpotify } from './spotify.js';
 let pickerNumber = 0;
 
 export function createTrackPicker(host, { onChange, onPreview, onStop, onError, label = 'Música' }) {
   const id = `track-picker-${++pickerNumber}`;
-  host.innerHTML = `<label for="${id}">Música</label><div class="picker-search"><span aria-hidden="true">⌕</span><input id="${id}" class="catalog-query" type="search" placeholder="Música, artista ou link do Spotify" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results"></div><p class="picker-status" role="status"></p><div class="catalog-results" id="${id}-results" role="listbox" aria-label="Resultados da busca" hidden></div><div class="selected-track" hidden></div>`;
+  host.innerHTML = `<label for="${id}">Música</label><div class="picker-sources" hidden><button type="button" data-catalog-source="deezer" aria-pressed="true">Deezer</button><button type="button" data-catalog-source="spotify" aria-pressed="false">Spotify</button><button type="button" class="text-button picker-connect">Conectar Spotify</button></div><div class="picker-search"><span aria-hidden="true">⌕</span><input id="${id}" class="catalog-query" type="search" placeholder="Música, artista ou link da faixa" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results"></div><p class="picker-status" role="status"></p><div class="catalog-results" id="${id}-results" role="listbox" aria-label="Resultados da busca" hidden></div><button type="button" class="text-button picker-more" hidden>Ver mais resultados</button><div class="selected-track" hidden></div>`;
   const input = host.querySelector('input');
   host.querySelector('label').textContent=label;
   const list = host.querySelector('.catalog-results');
   const status = host.querySelector('.picker-status');
   const selected = host.querySelector('.selected-track');
-  let results = [], current = null, highlighted = -1, timer, request, generation = 0;
-  function collapse() { list.hidden = true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); highlighted = -1; }
+  const more=host.querySelector('.picker-more'),sources=host.querySelector('.picker-sources'),connect=host.querySelector('.picker-connect');
+  let results = [], current = null, highlighted = -1, timer, request, generation = 0,nextOffset=null,source='deezer',connected=false,manualSource=false;
+  function collapse() { list.hidden = true;more.hidden=true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); highlighted = -1; }
   function cancel() { clearTimeout(timer); request?.abort(); generation++; input.removeAttribute('aria-busy'); }
   function clear(notify = true) {
     current = null; selected.replaceChildren(); selected.hidden = true; input.setCustomValidity('');
@@ -39,24 +41,42 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
     input.setAttribute('aria-activedescendant', `${id}-option-${highlighted}`);
     list.children[highlighted]?.scrollIntoView({ block: 'nearest' });
   }
-  async function search(query) {
+  async function search(query,append=false) {
     cancel(); const token = generation; request = new AbortController();
-    input.setAttribute('aria-busy', 'true'); status.textContent = 'Buscando…'; collapse();
+    input.setAttribute('aria-busy', 'true'); status.textContent = 'Buscando…';more.disabled=true;if(!append)collapse();
     try {
-      const response = await fetch(`/api/search?${new URLSearchParams({ q: query })}`, { signal: request.signal });
+      const response = await fetch(`/api/search?${new URLSearchParams({ q: query,provider:source,offset:append&&nextOffset!==null?nextOffset:0 })}`, { signal: request.signal });
       const data = await response.json();
       if (token !== generation) return;
       if (!response.ok) throw new Error(data.error || 'A busca está indisponível.');
-      results = (data.results || []).map(sanitizeTrack).filter(Boolean);
-      status.textContent = results.length ? `Resultados · ${data.provider === 'spotify' ? 'Spotify' : 'Deezer'}` : 'Nenhuma música encontrada.';
+      const found=(data.results || []).map(sanitizeTrack).filter(Boolean),unique=new Map((append?results:[]).map(track=>[track.catalogId,track]));found.forEach(track=>unique.set(track.catalogId,track));results=[...unique.values()];
+      nextOffset=Number.isInteger(data.nextOffset)?data.nextOffset:null;
+      status.textContent = results.length ? `${results.length} resultados · ${data.provider === 'spotify' ? 'Spotify' : 'Deezer'}` : 'Não encontrou? Tente o título com o artista ou cole o link da faixa.';
       list.innerHTML = results.map((track, i) => `<button type="button" role="option" aria-selected="false" tabindex="-1" data-result="${i}" id="${id}-option-${i}" class="catalog-result"><img src="${escape(track.artwork || 'assets/cover-unavailable.svg')}" alt="" width="42" height="42"><span><strong>${escape(track.title)}</strong><small>${escape(track.artist)}${track.album ? ` · ${escape(track.album)}` : ''}</small></span><small>${track.duration ? `${Math.floor(track.duration / 60)}:${String(Math.round(track.duration % 60)).padStart(2, '0')}` : ''}</small></button>`).join('');
       list.hidden = results.length === 0; input.setAttribute('aria-expanded', String(results.length > 0));
+      more.hidden=nextOffset===null;
     } catch (error) {
       if (error.name === 'AbortError' || token !== generation) return;
       status.replaceChildren(document.createTextNode('Não foi possível buscar. '));
-      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Tentar novamente'; retry.onclick = () => search(query); status.append(retry);
-    } finally { if (token === generation) input.removeAttribute('aria-busy'); }
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Tentar novamente'; retry.onclick = () => search(query,append); status.append(retry);
+    } finally { if (token === generation) {input.removeAttribute('aria-busy');more.disabled=false;} }
   }
+  more.addEventListener('click',()=>{if(nextOffset!==null)void search(input.value.trim(),true);});
+  function updateSource(state){
+    connected=state.connected;sources.hidden=!state.configured;connect.hidden=connected;
+    if(!manualSource)source=connected?'spotify':'deezer';
+    sources.querySelectorAll('[data-catalog-source]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.catalogSource===source)));
+  }
+  getSpotifyStatus().then(updateSource).catch(()=>{});
+  window.addEventListener('spotifychange',event=>{updateSource(event.detail);const q=input.value.trim();if(q.length>=2)void search(q);});
+  async function connectAccount(){try{await connectSpotify();}catch(error){onError?.(error.message);}}
+  connect.addEventListener('click',()=>void connectAccount());
+  sources.addEventListener('click',event=>{
+    const button=event.target.closest('[data-catalog-source]');if(!button)return;
+    if(button.dataset.catalogSource==='spotify'&&!connected){manualSource=false;void connectAccount();return;}
+    source=button.dataset.catalogSource;manualSource=true;updateSource({configured:true,connected});
+    const q=input.value.trim();if(q.length>=2)void search(q);
+  });
   input.addEventListener('input', () => {
     cancel(); collapse(); clear();
     const query = input.value.trim(); status.textContent = '';

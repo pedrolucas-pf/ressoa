@@ -47,18 +47,23 @@
     <span class="auth-credit">Capas de álbuns · Deezer</span>
     </div>
     <section class="auth-about" id="como-funciona" aria-labelledby="about-title">
-      <span class="section-label">Como funciona</span>
-      <h2 id="about-title">Uma música pode guardar muita coisa.</h2>
-      <p class="about-lead">Escolha uma faixa e registre o que ela significa para você. Com palavras, um trecho da letra ou só a música.</p>
-      <div class="about-grid">
-        <article><span class="about-number">01</span><h3>Um perfil com a sua cara</h3><p>Escolha sua foto, bio, capa de fundo e músicas favoritas. Fixe os Ressoas que mais dizem sobre você.</p></article>
-        <article><span class="about-number">02</span><h3>O trecho certo</h3><p>Destaque versos sobre a capa e ouça prévias. Nas faixas disponíveis, escolha o início e o fim da prévia que acompanha seu Ressoa.</p></article>
-        <article><span class="about-number">03</span><h3>Você escolhe quem vê</h3><p>Guarde só no diário ou compartilhe. Com perfil privado, você decide quem pode seguir e ver suas publicações.</p></article>
-        <article><span class="about-number">04</span><h3>Músicas que encontram pessoas</h3><p>Role o For you, acompanhe quem você segue, curta, reposte e converse nos comentários.</p></article>
-        <article><span class="about-number">05</span><h3>Uma música para a semana</h3><p>Escolha o Ressoa da semana e dê destaque à faixa que representa seu momento, sem alterar seu diário.</p></article>
-        <article><span class="about-number">06</span><h3>Guarde e compartilhe</h3><p>Salve Ressoas para voltar depois. Baixe a imagem ou copie o link para compartilhar em outras redes.</p></article>
+      <div class="about-heading"><span class="section-label">por dentro do ressoa</span><h2 id="about-title">o seu<br><em>lado B.</em></h2><p>Um diário feito das músicas que ficam.</p></div>
+      <div class="about-spread">
+        <div class="about-scene" aria-label="Capas de músicas e uma página do diário">
+          <div class="about-vinyl" aria-hidden="true"><span></span></div>
+          <figure class="about-sleeve about-sleeve-back" data-about-album="1"><img src="assets/cover-unavailable.svg" alt="" loading="lazy" width="400" height="400"><figcaption><span></span><small></small></figcaption></figure>
+          <figure class="about-sleeve about-sleeve-front" data-about-album="0"><span class="sleeve-label">ressoa da semana</span><img src="assets/cover-unavailable.svg" alt="" loading="lazy" width="400" height="400"><figcaption><span></span><small></small></figcaption></figure>
+          <div class="about-note"><span>meus sons</span><p>“essa eu guardo.”</p><svg viewBox="0 0 48 18" aria-hidden="true"><path d="M1 9h4m3-4v8m4-11v14m4-10v6m4-11v16m4-12v8m4-11v14m4-9v4m4-7v10m4-6v2m4-3v4"/></svg></div>
+        </div>
+        <div class="about-details">
+          <div><h3>Um espaço seu.</h3><p>Sua foto, suas favoritas, uma capa de fundo. Fixe os Ressoas que quer deixar por perto.</p></div>
+          <div><h3>Com ou sem palavras.</h3><p>Uma lembrança, um verso ou só a música. Guarde no diário e escolha uma faixa para a semana.</p></div>
+          <div><h3>Você decide quem entra.</h3><p>Compartilhe ou deixe só para você. No perfil privado, os seguidores passam pela sua aprovação.</p></div>
+          <p class="about-connections">Curta, comente, reposte.<br>Descubra o que outras pessoas estão sentindo.</p>
+        </div>
       </div>
-      <div class="about-cta"><p>Qual música faz sentido para você hoje?</p><button type="button" class="button primary" id="about-register">Criar minha conta</button><a class="text-button" href="#auth-screen">Já tenho conta</a></div>
+      <div class="about-favorites"><span>as suas favoritas, sempre por perto</span><div class="about-album-row" aria-label="Capas de álbuns brasileiros"><img data-about-art="2" src="assets/cover-unavailable.svg" alt="" loading="lazy" width="140" height="140"><img data-about-art="3" src="assets/cover-unavailable.svg" alt="" loading="lazy" width="140" height="140"><img data-about-art="4" src="assets/cover-unavailable.svg" alt="" loading="lazy" width="140" height="140"><img data-about-art="5" src="assets/cover-unavailable.svg" alt="" loading="lazy" width="140" height="140"><img data-about-art="6" src="assets/cover-unavailable.svg" alt="" loading="lazy" width="140" height="140"><img data-about-art="7" src="assets/cover-unavailable.svg" alt="" loading="lazy" width="140" height="140"></div></div>
+      <div class="about-cta"><span class="brand" aria-label="ressoa">ress<span class="brand-disc"><span class="sr-only">o</span></span>a</span><div><button type="button" class="button primary" id="about-register">Criar minha conta <span aria-hidden="true">↗</span></button><a class="text-button" href="#auth-screen">Já tenho conta</a></div></div>
     </section>
   </section>
   <div id="app-shell" hidden>
@@ -182,6 +187,7 @@
       <label>Nome de usuário<input name="handle" required minlength="1" maxlength="48" autocapitalize="none" spellcheck="false" title="Use de 1 a 24 caracteres, sem emojis."></label>
       <label>Bio<textarea name="bio" maxlength="180" rows="3"></textarea></label>
       <label class="checkbox-label"><input type="checkbox" name="isPrivate">Perfil privado</label>
+      <div class="spotify-connection" data-spotify-connection hidden><p data-spotify-status></p><button type="button" class="text-button" data-connect-spotify>Conectar Spotify</button><button type="button" class="text-button" data-disconnect-spotify hidden>Desconectar Spotify</button></div>
       <p class="form-note">Somente seguidores aprovados veem seus Ressoas e reposts. Seguidores atuais são mantidos; você pode removê-los no perfil.</p>
       <fieldset id="favorite-fields"><legend>Músicas favoritas · até 6</legend></fieldset>
       <fieldset class="background-fields"><legend>Capa de fundo</legend><div id="background-track-picker" class="track-picker"></div><button class="text-button" id="remove-background" type="button">Remover fundo</button></fieldset>
@@ -202,6 +208,7 @@
     <button type="button" class="text-button" id="comments-more" hidden>Ver mais comentários</button><button type="button" class="text-button" id="comments-retry" hidden>Tentar novamente</button>
     <form id="comment-form"><label for="comment-text">Seu comentário</label><textarea id="comment-text" name="comment" required maxlength="1000" rows="3" placeholder="O que essa música te faz pensar?"></textarea><button type="submit" class="button primary">Enviar</button></form>
   </dialog>
+  <dialog id="spotify-dialog" aria-labelledby="spotify-title"><div class="dialog-heading"><h2 id="spotify-title">Ouvir pelo Spotify</h2><button type="button" class="icon-button" data-close="spotify-dialog" aria-label="Fechar conexão">×</button></div><div class="spotify-connection" data-spotify-connection hidden><p data-spotify-status></p><p class="form-note">A faixa completa toca pela sua própria conta Premium. O trecho escolhido fica salvo no Ressoa.</p><button type="button" class="button primary" data-connect-spotify>Conectar Spotify</button><button type="button" class="text-button" data-disconnect-spotify hidden>Desconectar Spotify</button></div></dialog>
   <dialog id="notifications-dialog" aria-labelledby="notifications-title">
     <div class="dialog-heading"><h2 id="notifications-title">Notificações</h2><button class="icon-button" data-close="notifications-dialog" aria-label="Fechar notificações">×</button></div>
     <div id="notification-content"></div>

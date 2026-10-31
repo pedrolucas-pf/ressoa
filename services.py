@@ -115,19 +115,34 @@ def spotify_track(query):
                 'artwork': _https(metadata.get('thumbnail_url')), 'previewUrl': '', 'url': source}
     return _cached(('spotify', track_id), fetch)
 
-def search_tracks(query):
+def search_tracks(query,offset=0):
     query = query.strip()
+    if type(offset) is not int or not 0<=offset<=240:raise ValueError('Página de busca inválida.')
     if len(query) < 2 or len(query) > 180:
         raise ValueError('Digite de 2 a 180 caracteres.')
     if query.startswith(('https://open.spotify.com/', 'spotify:')):
-        return {'results': [spotify_track(query)], 'provider': 'spotify'}
+        return {'results': [spotify_track(query)] if not offset else [], 'provider': 'spotify','nextOffset':None}
+    direct=re.fullmatch(r'(?:https://(?:www\.)?deezer\.com/(?:[a-z]{2}/)?track/|deezer:)([0-9]{1,16})(?:\?[^\s]*)?/?',query)
+    if direct:return dict(results=[get_track('deezer:'+direct.group(1))] if not offset else [],provider='deezer',nextOffset=None)
+    if query.startswith(('http://','https://')):raise ValueError('Use o link de uma faixa do Spotify ou Deezer.')
     def fetch():
-        data = _json('https://api.deezer.com/search?' + urlencode({'q': query, 'limit': 12}))
+        data = _json('https://api.deezer.com/search?' + urlencode({'q': query, 'limit': 20,'index':offset}))
         if not isinstance(data, dict) or 'error' in data:
             raise ServiceError('A busca de músicas está indisponível.')
-        results = [deezer_track(item) for item in data.get('data', []) if item.get('id') and item.get('artist', {}).get('name')]
-        return {'results': results, 'provider': 'deezer'}
-    return _cached(('search', query.casefold()), fetch)
+        raw=list(data.get('data') or []);has_more=bool(data.get('next'))
+        simplified=''.join(c for c in unicodedata.normalize('NFKD',query) if not unicodedata.combining(c))
+        simplified=re.sub(r'\s*[-–—]\s*',' ',simplified)
+        if len(raw)<4 and simplified!=query:
+            try:
+                extra=_json('https://api.deezer.com/search?'+urlencode(dict(q=simplified,limit=20,index=offset)))
+                if isinstance(extra,dict) and not extra.get('error'):raw.extend(extra.get('data') or []);has_more=has_more or bool(extra.get('next'))
+            except ServiceError:pass
+        results={}
+        for item in raw:
+            if isinstance(item,dict) and item.get('id') and item.get('artist',{}).get('name'):
+                result=deezer_track(item);results.setdefault(result['catalogId'],result)
+        return {'results': list(results.values()), 'provider': 'deezer','nextOffset':offset+20 if has_more and offset<240 else None}
+    return _cached(('search', query.casefold(),offset), fetch)
 
 def get_track(catalog_id):
     match = re.fullmatch(r'deezer:([0-9]{1,16})', catalog_id)

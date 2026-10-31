@@ -117,6 +117,16 @@ CREATE TABLE IF NOT EXISTS password_resets (
  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS password_resets_expiry ON password_resets(expires_at);
+CREATE TABLE IF NOT EXISTS spotify_oauth (
+ state_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ session_hash TEXT NOT NULL REFERENCES sessions(token_hash) ON DELETE CASCADE,
+ verifier TEXT NOT NULL, redirect_uri TEXT NOT NULL, expires_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS spotify_connections (
+ user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, client_id TEXT NOT NULL,
+ spotify_user_id TEXT NOT NULL, display_name TEXT NOT NULL, access_token TEXT NOT NULL,
+ refresh_token TEXT NOT NULL, expires_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tracks (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS posts (
  id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -172,7 +182,7 @@ CREATE TABLE IF NOT EXISTS shares (
  method TEXT NOT NULL CHECK(method IN ('native','link')), updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,post_id)
 );
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;
 """
 
 
@@ -251,13 +261,18 @@ class Database:
         return value
 
     @staticmethod
-    def clean_audio_excerpt(value):
+    def clean_audio_excerpt(value,track=None):
         if value is None:return None
         if not isinstance(value,dict):raise APIError(400,'Trecho de áudio inválido.')
         start,end=value.get('start'),value.get('end')
-        if any(type(n) not in (int,float) or not math.isfinite(n) for n in (start,end)) or not 0<=start<end<=30 or end-start<1:
-            raise APIError(400,'Escolha pelo menos 1 segundo dentro da prévia de 30 segundos.')
-        return dict(start=round(start,2),end=round(end,2))
+        full=value.get('source')=='spotify'
+        maximum=min(float((track or {}).get('duration',0)),86400) if full else 30
+        if full and (not track or track.get('provider')!='spotify'):raise APIError(400,'Escolha uma faixa do Spotify para usar o áudio completo.')
+        if any(type(n) not in (int,float) or not math.isfinite(n) for n in (start,end)) or not 0<=start<end<=maximum or not 1<=round(end-start,2)<=30:
+            raise APIError(400,'Escolha um trecho de 1 a 30 segundos dentro da faixa disponível.')
+        result=dict(start=round(start,2),end=round(end,2))
+        if full:result['source']='spotify'
+        return result
 
     @staticmethod
     def can_view_profile(db,viewer_id,target_id):
@@ -668,8 +683,8 @@ class Database:
                 if not existing or existing['track_id'] != track_id:
                     self.store_track(db, track)
                 excerpt=self.clean_excerpt(item.get('lyricExcerpt',existing['lyric_excerpt'] if existing and existing['track_id']==track_id else ''))
-                audio=self.clean_audio_excerpt(item.get('audioExcerpt',json.loads(existing['audio_excerpt']) if existing and existing['track_id']==track_id and existing['audio_excerpt'] else None))
-                if audio and track['provider']!='deezer':raise APIError(400,'A seleção de áudio está disponível nas prévias Deezer.')
+                audio=self.clean_audio_excerpt(item.get('audioExcerpt',json.loads(existing['audio_excerpt']) if existing and existing['track_id']==track_id and existing['audio_excerpt'] else None),track)
+                if audio and track['provider']!='deezer' and audio.get('source')!='spotify':raise APIError(400,'Escolha um trecho do Spotify conectado ou uma prévia Deezer.')
                 audio_json=json.dumps(audio) if audio else None
                 visibility = item.get('visibility')
                 if visibility not in ('public', 'private'):
@@ -755,8 +770,8 @@ class Database:
                 raise APIError(409, 'Você já usou a escolha desta semana. Uma nova será liberada na próxima segunda-feira.')
             track_id, message = self.store_track(db, data.get('track')), text(data.get('text', ''), 0, 2400)
             excerpt=self.clean_excerpt(data.get('lyricExcerpt',''))
-            audio=self.clean_audio_excerpt(data.get('audioExcerpt'))
-            if audio and data['track'].get('provider')!='deezer':raise APIError(400,'A seleção de áudio está disponível nas prévias Deezer.')
+            audio=self.clean_audio_excerpt(data.get('audioExcerpt'),clean_track(data['track']))
+            if audio and data['track'].get('provider')!='deezer' and audio.get('source')!='spotify':raise APIError(400,'Escolha um trecho do Spotify conectado ou uma prévia Deezer.')
             identifier, timestamp = str(uuid.uuid4()), now_iso()
             db.execute("INSERT INTO posts (id,owner_id,track_id,text,visibility,kind,created_at,updated_at,lyric_excerpt,audio_excerpt) VALUES (?,?,?,?,'public','weekly',?,?,?,?)", (identifier, user_id, track_id, message, timestamp, timestamp,excerpt,json.dumps(audio) if audio else None))
             db.execute('INSERT INTO weekly VALUES (?,?,?,?,NULL)', (user_id, current_week(), identifier, timestamp))
@@ -1079,7 +1094,7 @@ class Database:
                 track = clean_track(value['track']) if value.get('track') else None
                 if track:
                     self.store_track(db, track)
-                clean = dict(text=message, track=track, visibility='public' if value.get('visibility') == 'public' else 'private',lyricExcerpt=self.clean_excerpt(value.get('lyricExcerpt','')),audioExcerpt=self.clean_audio_excerpt(value.get('audioExcerpt')))
+                clean = dict(text=message, track=track, visibility='public' if value.get('visibility') == 'public' else 'private',lyricExcerpt=self.clean_excerpt(value.get('lyricExcerpt','')),audioExcerpt=self.clean_audio_excerpt(value.get('audioExcerpt'),track))
                 db.execute('UPDATE users SET draft=? WHERE id=?', (json.dumps(clean), user_id))
         elif key == 'seen':
             clean = self.clean_seen(value)

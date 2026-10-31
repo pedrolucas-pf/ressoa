@@ -24,13 +24,13 @@ O projeto está disponível em **[ressoa.onrender.com](https://ressoa.onrender.c
 - **Meus sons:** diário em blocos, com criação, edição, exclusão e controle de visibilidade das publicações.
 - **Feed em todos os dispositivos:** rolagem vertical com inércia e encaixe em For you e Seguindo, usando toque, mouse ou trackpad. No primeiro, puxar para baixo atualiza; no último, outro gesto para cima renova a seleção. As setas do teclado também permitem navegar.
 - **Ressoa da semana:** uma escolha por semana, independente do diário e em destaque no feed e no perfil.
-- **Músicas e letras:** busca de faixas, capas, metadados, prévias e seleção de um trecho da letra para compor a publicação, conforme disponibilidade.
-- **Trecho de áudio:** início e fim personalizáveis dentro da prévia Deezer disponível, tanto no diário quanto no Ressoa da semana. A escolha acompanha o play da publicação no feed, perfil e leitura; os tempos são relativos à prévia, com limite de 30 segundos. Não dá acesso a outras partes da gravação completa. O controle de posição da faixa completa no Spotify exige autorização do usuário e Premium, conforme a [documentação do Spotify](https://developer.spotify.com/documentation/web-api/reference/seek-to-position-in-currently-playing-track).
+- **Músicas e letras:** busca de faixas com páginas de resultados, pesquisa alternativa sem acentos e importação por link do Deezer ou Spotify. O catálogo Deezer funciona sem conexão externa; com Spotify conectado, também é possível buscar no catálogo oficial e alternar entre os dois. Capas, metadados, prévias e letras dependem da disponibilidade da faixa.
+- **Trecho de áudio:** início e fim ajustáveis por controles ou digitando o tempo, tanto no diário quanto no Ressoa da semana. Com Spotify Premium conectado, é possível escolher de 1 a 30 segundos de qualquer ponto da faixa; cada ouvinte precisa conectar sua própria conta Premium para ouvir esse trecho. Sem conexão Spotify, continuam disponíveis as prévias Deezer. A escolha é salva com a publicação e acompanha o play no feed, perfil e leitura.
 - **Perfil:** foto, bio, até seis músicas favoritas, publicações fixadas, reposts e capa de fundo personalizável.
 - **Conexões:** busca de pessoas, seguidores, contas privadas e aprovação de solicitações para seguir.
 - **Notificações:** o ícone de pessoa com “+” reúne seguidores, solicitações, curtidas e reposts, com contador vermelho, data e hora. Avisos de interação abrem o Ressoa correspondente. É possível confirmar ou excluir pedidos, seguir de volta e remover avisos pelo “×”. Avisos expiram após sete dias; pedidos pendentes permanecem até serem confirmados ou excluídos. A leitura é salva na conta. O contador atualiza a cada 30 segundos enquanto o site está aberto; solicitações enviadas são conferidas a cada cinco segundos para refletir aprovações sem recarregar a página.
 - **Comentários:** conversas nos Ressoas, com o ícone à direita da curtida, carregamento em páginas e texto de até 1.000 caracteres. Cada novo comentário de outra pessoa avisa o dono da publicação; o aviso mostra apenas quem comentou, sem o texto, e abre a conversa ao clicar. Quem escreveu e o dono da publicação podem apagar um comentário. As permissões da publicação e do perfil são conferidas no servidor em cada leitura, envio e exclusão.
-- **Apresentação:** a página de login tem uma seção com as possibilidades do Ressoa, acessível ao rolar a tela, com atalho para criar conta.
+- **Apresentação:** abaixo do login, capas de discos brasileiros, um vinil e notas do diário apresentam o Ressoa, com explicações curtas sobre perfil, trechos, visibilidade e conexões.
 - **Interações:** curtidas sem contagem pública, reposts e Ressoas salvos. O autor pode consultar quem curtiu ou repostou.
 - **Compartilhamento:** prévia da imagem com a marca Ressoa no rodapé, download do Ressoa e cópia do link. Após entrar ou criar uma conta pelo link, a pessoa chega à publicação compartilhada.
 - **Contas:** cadastro, login por e-mail ou usuário e opção de manter a sessão no dispositivo.
@@ -46,7 +46,7 @@ Nomes de usuário diferenciam maiúsculas e minúsculas: `DAss` e `dass` podem p
 | Banco local | SQLite |
 | Banco de produção | PostgreSQL no Neon, com Psycopg |
 | Servidor | Gunicorn em contêiner Docker, hospedado no Render |
-| Música | Catálogo e prévias Deezer, embeds Spotify e letras via LRCLIB |
+| Música | Deezer, Spotify Web API e Web Playback SDK opcionais, embeds públicos e letras via LRCLIB |
 
 ### Como funciona
 
@@ -65,6 +65,7 @@ ressoa/
 ├── database.py             # Persistência e regras de negócio
 ├── postgres_storage.py     # Adaptação das consultas para PostgreSQL
 ├── services.py             # Integrações musicais
+├── spotify.py              # Autorização PKCE, renovação de acesso e API Spotify
 ├── mail.py                 # Recuperação de senha pela API de e-mail
 ├── serve.py                # Servidor de desenvolvimento
 ├── Dockerfile              # Imagem da aplicação
@@ -85,12 +86,25 @@ A versão online roda no **Render**, com os dados no **Neon**. O Dockerfile defi
 | `EMAIL_FROM` | Endereço remetente verificado na Brevo |
 | `EMAIL_FROM_NAME` | Nome do remetente; padrão: `Ressoa` |
 | `GOOGLE_SITE_VERIFICATION` | Valor `content` da tag HTML do Google Search Console, quando configurado |
+| `SPOTIFY_CLIENT_ID` | Client ID público do aplicativo Spotify; opcional, habilita conexão, busca e seleção na faixa completa |
 
 No endereço padrão do Render, a origem é obtida de `RENDER_EXTERNAL_HOSTNAME`. O servidor escuta em `0.0.0.0:$PORT`.
 
 `/healthz` confirma que o servidor está respondendo, sem abrir conexão com o banco. É o endereço usado pelo Render e indicado para um monitor externo a cada cinco minutos. `/readyz` verifica também o acesso ao PostgreSQL e serve para diagnóstico; consulte-o quando necessário, para permitir que o Neon suspenda o processamento durante períodos sem uso.
 
 Contas e publicações permanecem no Neon ao atualizar a aplicação. Uma instalação nova cria apenas as tabelas, sem usuários ou Ressoas de exemplo. O banco local e as credenciais ficam fora do Git. A retenção dos backups de produção é configurada no próprio Neon.
+
+### Conexão com Spotify
+
+1. No [Dashboard do Spotify](https://developer.spotify.com/dashboard), crie um aplicativo com **Web API** e **Web Playback SDK**. Cadastre o site `https://ressoa.onrender.com` e o endereço de retorno **exato** `https://ressoa.onrender.com/api/spotify/callback`.
+2. No Render, configure `SPOTIFY_CLIENT_ID` com o Client ID público e publique a aplicação. O fluxo usa [Authorization Code com PKCE](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow), sem Client Secret.
+3. No Ressoa, use **Conectar Spotify** na busca de músicas ou na edição do perfil. A autorização abre uma janela separada para manter o editor aberto. Selecione Spotify na busca, escolha a faixa e abra **Escolher trecho de áudio** para indicar início e fim na música completa.
+
+A autorização é vinculada à conta e à sessão que iniciaram a conexão, expira em dez minutos e é usada uma única vez. As autorizações de acesso e renovação ficam no banco do servidor; o token de renovação não vai ao navegador. O SDK recebe apenas o token de acesso da própria conta autenticada, em memória. **Desconectar Spotify** remove a conexão armazenada; não remove a conta Ressoa nem suas publicações. Os registros HTTP não incluem os parâmetros dos endereços.
+
+O áudio é transmitido pelo Spotify, sem baixar ou guardar arquivos da gravação no Ressoa. A reprodução da faixa completa requer Premium, conforme a [documentação do SDK](https://developer.spotify.com/documentation/web-playback-sdk). Aplicativos novos ficam em modo de desenvolvimento, com usuários autorizados limitados; liberar para mais pessoas depende das [regras de acesso do Spotify](https://developer.spotify.com/documentation/web-api/concepts/quota-modes). Se o domínio mudar, atualize o endereço de retorno também no Dashboard.
+
+Sem `SPOTIFY_CLIENT_ID`, a conexão permanece oculta e a busca Deezer, as prévias e o restante do site continuam disponíveis.
 
 Como a hospedagem atual usa o plano gratuito do Render, a abertura pode demorar após um período sem acessos. Um monitor externo pode reduzir essa espera, sujeito aos limites do plano. O monitor precisa estar configurado e ativo fora da aplicação; este repositório não instala agendamentos por conta própria.
 

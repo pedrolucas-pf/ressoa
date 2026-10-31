@@ -1,5 +1,6 @@
 ﻿// Public Spotify iFrame API and native previews share one playback lifecycle.
 import { ensureTrackDetails, trackSummary } from './track-context.js';
+import { playSpotifyExcerpt, stopSpotifyPlayback, setSpotifyFeedback } from './spotify.js';
 let spotifyAPI;
 function loadSpotifyAPI() {
   if (spotifyAPI) return spotifyAPI;
@@ -13,6 +14,7 @@ function loadSpotifyAPI() {
   return spotifyAPI;
 }
 export function createPlayback({ tracks, musicDetails, toast }) {
+  setSpotifyFeedback(toast);
   let audio = null, controller = null, generation = 0, coverButton = null, coverToggle = null;
   const playIcon = '<span aria-hidden="true">▶</span>';
   function state(button, playing) {
@@ -23,6 +25,7 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     button.classList.toggle('playing', playing);
   }
   function stopPreview() {
+    stopSpotifyPlayback();
     document.dispatchEvent(new Event('ressoaplaybackstop'));
     generation++;
     coverButton=null;coverToggle=null;
@@ -64,6 +67,10 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     stopPreview(); const token = generation; const detail = musicDetails[index];
     coverButton=button;
     state(button, false);
+    if(detail.provider==='spotify'&&excerpt?.source==='spotify'){
+      coverToggle=event=>{event.stopPropagation();button.setAttribute('aria-busy','true');void playSpotifyExcerpt(detail,excerpt,playing=>state(button,playing)).catch(error=>toast(error.message)).finally(()=>button.removeAttribute('aria-busy'));};
+      return;
+    }
     if (detail.provider !== 'spotify') { nativeAudio(detail, button, false, index, excerpt); return; }
     let ready = false, queued = false;
     coverToggle = event => {

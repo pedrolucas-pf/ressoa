@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote
 from database import APIError, Database
 from mail import PasswordRecovery
 from services import ServiceError, search_tracks, get_track, lyrics, login_artwork
+from spotify import Spotify
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / 'web'
@@ -47,10 +48,11 @@ class Application:
         source=database_path if database_path is not None else os.getenv('DATABASE_URL') or os.getenv('DATABASE_PATH') or str(ROOT/'storage'/'ressoa.sqlite3')
         self.db=Database(source)
         self.password_recovery=PasswordRecovery(self.db)
+        self.spotify=Spotify(self.db)
 
     def __call__(self, env, start_response):
         started = perf_counter()
-        headers = [('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'strict-origin-when-cross-origin'),
+        headers = [('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'no-referrer' if env.get('PATH_INFO')=='/api/spotify/callback' else 'strict-origin-when-cross-origin'),
                    ('X-Frame-Options', 'DENY'), ('Cache-Control', 'no-store')]
         if env.get('PATH_INFO','').startswith('/api/') or env.get('PATH_INFO') in ('/healthz','/readyz'):
             headers.append(('X-Robots-Tag','noindex'))
@@ -162,6 +164,16 @@ class Application:
         token = self.token(env)
         user_id = self.db.session_user(token) if token else None
         data = self.body(env) if method in ('POST', 'PUT', 'DELETE') else {}
+        if path=='/api/spotify/callback' and method=='GET':
+            params=parse_qs(env.get('QUERY_STRING',''));connected=False;message='Spotify conectado. Você pode voltar ao Ressoa.'
+            try:
+                self.spotify.finish(user_id,token,params.get('state',[''])[0],params.get('code',[''])[0],params.get('error',[''])[0]);connected=True
+            except APIError as error:message=error.message
+            payload=json.dumps(dict(type='ressoa-spotify',connected=connected,message=message),ensure_ascii=False).replace('<','\\u003c')
+            origin=json.dumps(self.public_origin(env)).replace('<','\\u003c')
+            script=f'if(window.opener){{window.opener.postMessage({payload},{origin});if({str(connected).lower()})window.close();}}'
+            html=f'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Spotify · Ressoa</title><body style="background:#101010;color:#ededed;font:16px system-ui;padding:40px;line-height:1.7"><h1>Ressoa + Spotify</h1><p>{escape(message)}</p><button onclick="window.close()" style="padding:12px 24px">Fechar</button><script>{script}</script></body></html>'
+            return (200 if connected else 400),html.encode('utf-8'),[('Content-Type','text/html; charset=utf-8')]
         if path == '/api/password/forgot' and method == 'POST':
             self.db.limit('recovery-ip:'+env.get('REMOTE_ADDR',''), 5, 900)
             email = data.get('email')
@@ -201,6 +213,17 @@ class Application:
             raise APIError(401, 'Entre na sua conta para continuar.')
         params = parse_qs(env.get('QUERY_STRING', ''))
         value = lambda key, default='': params.get(key, [default])[0]
+        if path=='/api/spotify/status' and method=='GET':return 200,self.spotify.status(user_id),[]
+        if path=='/api/spotify/connect' and method=='POST':
+            self.db.limit('spotify-connect:'+user_id,10,600)
+            return 200,self.spotify.begin(user_id,token,self.public_origin(env)+'/api/spotify/callback'),[]
+        if path=='/api/spotify/connection' and method=='DELETE':return 200,self.spotify.disconnect(user_id),[]
+        if path=='/api/spotify/token' and method=='GET':
+            self.db.limit('spotify-token:'+user_id,90,60)
+            return 200,dict(accessToken=self.spotify.token(user_id)),[]
+        if path=='/api/spotify/play' and method=='POST':
+            self.db.limit('spotify-play:'+user_id,90,60)
+            return 200,self.spotify.play(user_id,data),[]
         if path == '/api/bootstrap' and method == 'GET':
             return 200, self.db.bootstrap(user_id), []
         if path == '/api/feed' and method == 'POST':
@@ -218,9 +241,17 @@ class Application:
         if method == 'GET' and path in ('/api/search', '/api/track', '/api/lyrics'):
             self.db.limit('music:' + user_id, 180, 60)
             if path == '/api/search':
-                payload = search_tracks(value('q'))
+                source=value('provider','auto');offset=int(value('offset','0'))
+                query=value('q').strip()
+                if source not in ('auto','spotify','deezer'):raise APIError(400,'Catálogo inválido.')
+                direct=re.fullmatch(r'(?:https://open\.spotify\.com/(?:intl-[a-zA-Z-]+/)?track/|spotify:track:)([A-Za-z0-9]{22})(?:\?[^\s]*)?/?',query)
+                if direct and self.spotify.connection(user_id):payload=dict(results=[self.spotify.track(user_id,direct.group(1))] if not offset else [],provider='spotify',nextOffset=None)
+                elif query.startswith(('https://','http://','spotify:','deezer:')):payload=search_tracks(query,offset)
+                elif source=='spotify' or (source=='auto' and self.spotify.connection(user_id)):payload=self.spotify.search(user_id,query,offset)
+                else:payload = search_tracks(query,offset)
             elif path == '/api/track':
-                payload = get_track(value('id'))
+                identifier=value('id')
+                payload=self.spotify.track(user_id,identifier.split(':',1)[1]) if identifier.startswith('spotify:') and self.spotify.connection(user_id) else get_track(identifier)
                 self.db.cache_verified_track(payload)
             else:
                 payload = lyrics(value('title'), value('artist'), value('album'), value('duration', '0'))

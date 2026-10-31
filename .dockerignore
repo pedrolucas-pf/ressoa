@@ -6,6 +6,7 @@
 !postgres_storage.py
 !webapp.py
 !services.py
+!spotify.py
 !mail.py
 !gunicorn.conf.py
 !web/

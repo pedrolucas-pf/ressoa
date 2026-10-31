@@ -27,8 +27,15 @@ function renderCovers(pool) {
     fragment.append(tile);
   }
   $('#auth-covers').replaceChildren(fragment);
+  document.querySelectorAll('[data-about-album]').forEach(figure=>{
+    const item=artworks[Number(figure.dataset.aboutAlbum)];if(!item)return;
+    const img=figure.querySelector('img');img.src=item.artwork;img.alt=`${item.title} · ${item.artist}`;
+    figure.querySelector('figcaption span').textContent=item.title;figure.querySelector('figcaption small').textContent=item.artist;
+  });
+  document.querySelectorAll('[data-about-art]').forEach(img=>{const item=artworks[Number(img.dataset.aboutArt)];if(item){img.src=item.artwork;img.alt=`${item.title} · ${item.artist}`;}});
 }
 loadLoginArtwork().then(renderCovers).catch(()=>{});
+$('#auth-screen').addEventListener('error',event=>{const img=event.target;if(img instanceof HTMLImageElement&&!img.dataset.fallback){img.dataset.fallback='true';img.src='assets/cover-unavailable.svg';}},true);
 document.documentElement.dataset.theme='dark';
 try { localStorage.removeItem('ressoa.theme'); } catch {}
 let modeAnimation;

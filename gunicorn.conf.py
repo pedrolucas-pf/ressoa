@@ -7,5 +7,6 @@ threads = 8
 timeout = 60
 keepalive = 5
 accesslog = '-'
+access_log_format = '%(h)s %(t)s "%(m)s %(U)s %(H)s" %(s)s %(b)s'
 errorlog = '-'
 # Production data lives in PostgreSQL; no account data is stored in the container.
