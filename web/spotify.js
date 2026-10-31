@@ -8,13 +8,15 @@ const publicConnectionsPaused=true;
 export const setSpotifyFeedback=callback=>{notify=callback;};
 
 function updateControls(status){
+  const pending=publicConnectionsPaused&&!status.connected;
+  const notice=document.querySelector('#spotify-dialog [data-spotify-pending]');if(notice)notice.hidden=!pending;
   document.querySelectorAll('[data-spotify-shortcut]').forEach(button=>{
     button.hidden=!status.configured;button.dataset.connected=String(status.connected);
     const label=status.connected?'Spotify conectado · gerenciar conexão':'Conectar Spotify';
     button.setAttribute('aria-label',label);button.title=label;
   });
   document.querySelectorAll('[data-spotify-connection]').forEach(host=>{
-    host.hidden=!status.configured;
+    host.hidden=!status.configured||(pending&&Boolean(host.closest('#spotify-dialog')));
     const label=host.querySelector('[data-spotify-status]');if(label)label.textContent=status.connected?`Spotify conectado${status.displayName?' · '+status.displayName:''}`:'Conecte sua conta Spotify para buscar músicas.';
     host.querySelectorAll('[data-connect-spotify]').forEach(button=>{button.hidden=status.connected;button.textContent='Conectar Spotify';});
     host.querySelectorAll('[data-disconnect-spotify]').forEach(button=>button.hidden=!status.connected);
@@ -42,7 +44,7 @@ export async function getSpotifyStatus(force=false){
 }
 
 export async function connectSpotify(){
-  if(publicConnectionsPaused){notify('Aguarde! Estamos preparando a liberação da conexão com o Spotify.');return;}
+  if(publicConnectionsPaused){const dialog=document.getElementById('spotify-dialog');if(dialog&&!dialog.open)dialog.showModal();return;}
   if(popup&&!popup.closed){popup.focus();return;}
   const account=getAccount()?.user.id;
   popup=window.open('about:blank','ressoa-spotify','popup,width=520,height=720');
