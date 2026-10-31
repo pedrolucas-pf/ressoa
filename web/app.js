@@ -591,7 +591,7 @@ function renderExcerptChoice(scope,index) {
  const target=scope==='weekly'?$('#weekly-form'):form,picker=scope==='weekly'?weeklyPicker:composerPicker;
  if(index===undefined)index=picker.value;
  const value=index===null?'':target.elements.lyricExcerpt.value;
- $(`#${scope}-excerpt-choice`).innerHTML=`<button type="button" class="text-button" data-choose-excerpt="${scope}" ${index===null?'disabled':''}>${value?'Trocar trecho':'Escolher trecho da letra'}</button>${value?`<button type="button" class="text-button" data-remove-excerpt="${scope}">Usar só a capa</button><div class="excerpt-selected">${albumArt({artwork:cover(index),album:tracks[index].album||tracks[index].title,excerpt:value,size:140})}</div>`:''}`;
+ $(`#${scope}-excerpt-choice`).innerHTML=`<button type="button" class="text-button" data-choose-excerpt="${scope}" ${index===null?'disabled':''}>${svg('<path d="M4 6h6v7H5c0 3-1 4-2 5m11-12h6v7h-5c0 3-1 4-2 5"/>')}<span>${value?'Trocar trecho da letra':'Escolher trecho da letra'}</span></button>${value?`<button type="button" class="text-button" data-remove-excerpt="${scope}">Usar só a capa</button><div class="excerpt-selected">${albumArt({artwork:cover(index),album:tracks[index].album||tracks[index].title,excerpt:value,size:140})}</div>`:''}`;
  requestAnimationFrame(()=>fitLyricArt($(`#${scope}-excerpt-choice`)));
 }
 document.addEventListener('click',event=>{

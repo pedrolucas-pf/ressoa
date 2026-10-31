@@ -4,15 +4,17 @@ import { getSpotifyStatus, playSpotifyExcerpt, stopSpotifyPlayback, prepareSpoti
 export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }) {
   const playIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 11 7-11 7Z" fill="currentColor" stroke="none"/></svg>';
   const pauseIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6v12M16 6v12" stroke-width="3"/></svg>';
-  host.innerHTML=`<details class="audio-excerpt"><summary>Escolher trecho de áudio</summary><p class="form-note audio-note"></p><div class="audio-controls" hidden><div class="audio-range-heading"><output class="audio-selected-time"></output><span class="audio-length">30 s</span></div><div class="audio-timeline"><div class="audio-rail" aria-hidden="true"><span class="audio-window"></span></div><input class="audio-position" type="range" min="0" max="0" step="0.1" value="0" aria-label="Posição do trecho na música"></div><div class="audio-scale" aria-hidden="true"><span>0:00</span><span class="audio-total"></span></div><div class="audio-excerpt-actions"><button type="button" class="icon-button audio-listen" aria-label="Ouvir trecho" title="Ouvir trecho" aria-pressed="false">${playIcon}</button><button type="button" class="text-button audio-reset">Usar player padrão</button></div></div></details>`;
+  host.innerHTML=`<details class="audio-excerpt"><summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/></svg><span>Escolher trecho de áudio</span><svg class="excerpt-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><p class="form-note audio-note"></p><div class="audio-controls" hidden><div class="audio-range-heading"><div><output class="audio-selected-time"></output><output class="audio-playback-time" aria-label="Tempo reproduzido no trecho" aria-live="off"></output></div><span class="audio-length">30 s</span></div><div class="audio-timeline"><div class="audio-rail" aria-hidden="true"><span class="audio-window"><span class="audio-played"></span><span class="audio-playhead"></span></span></div><input class="audio-position" type="range" min="0" max="0" step="0.1" value="0" aria-label="Posição do trecho na música"></div><div class="audio-scale" aria-hidden="true"><span>0:00</span><span class="audio-total"></span></div><div class="audio-excerpt-actions"><button type="button" class="icon-button audio-listen" aria-label="Ouvir trecho" title="Ouvir trecho" aria-pressed="false">${playIcon}</button><button type="button" class="text-button audio-reset">Usar player padrão</button></div></div></details>`;
   const details=host.querySelector('details'),note=host.querySelector('.audio-note'),controls=host.querySelector('.audio-controls');
   const slider=host.querySelector('.audio-position'),timeline=host.querySelector('.audio-timeline'),listen=host.querySelector('.audio-listen');
   const selectedTime=host.querySelector('.audio-selected-time'),length=host.querySelector('.audio-length'),total=host.querySelector('.audio-total');
+  const playbackTime=host.querySelector('.audio-playback-time');
   const reset=host.querySelector('.audio-reset');
   const audio=document.createElement('audio');audio.preload='metadata';audio.volume=.5;host.append(audio);
   const connect=document.createElement('button');connect.type='button';connect.className='text-button';connect.dataset.connectSpotify='true';connect.textContent='Conectar Spotify';connect.hidden=true;details.append(connect);
   let index=null,value=null,generation=0,playGeneration=0,loaded=false,loading=null,limit=30,span=30,position=0,full=false,sdkActive=false,sdkPlaying=false,pendingPlay=false;
   let pointer=null,keying=false,changed=false;
+  let elapsed=0,windowWidth=36,nativeActive=false;
   const rangeKeys=['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'];
   const round=n=>Math.round(n*100)/100;
   const label=n=>{const tenths=Math.round(n*10);return `${Math.floor(tenths/600)}:${String(Math.floor(tenths/10)%60).padStart(2,'0')}${tenths%10?','+tenths%10:''}`;};
@@ -22,14 +24,22 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
     sdkPlaying=playing;listen.innerHTML=playing?pauseIcon:playIcon;listen.setAttribute('aria-pressed',String(playing));
     const label=playing?'Pausar trecho':'Ouvir trecho';listen.setAttribute('aria-label',label);listen.title=label;listen.classList.toggle('playing',playing);
   }
-  function stop(){playGeneration++;pendingPlay=false;audio.pause();if(sdkActive)stopSpotifyPlayback();sdkActive=false;showPlaying(false);listen.removeAttribute('aria-busy');}
+  function stop(){playGeneration++;pendingPlay=false;nativeActive=false;audio.pause();if(sdkActive)stopSpotifyPlayback();sdkActive=false;showPlaying(false);listen.removeAttribute('aria-busy');}
   function cancel(){pointer=null;keying=false;changed=false;stop();}
   function prepare(){if(full)void prepareSpotifyPlayback().catch(()=>{});}
+  function paintProgress(){
+    const fraction=Math.max(0,Math.min(1,elapsed/span));
+    timeline.style.setProperty('--audio-progress',String(fraction));
+    timeline.style.setProperty('--audio-playhead-offset',Math.max(0,windowWidth-18)*fraction+'px');
+    playbackTime.value=`${label(Math.floor(Math.min(elapsed,span)))} / ${label(span)}`;
+  }
+  function setProgress(seconds){if(!Number.isFinite(seconds))return;elapsed=Math.max(0,Math.min(span,seconds));paintProgress();}
   function syncTimeline(){
     const width=timeline.getBoundingClientRect().width;
-    const windowWidth=Math.min(width,Math.max(36,width*span/limit));
+    windowWidth=Math.min(width,Math.max(36,width*span/limit));
     timeline.style.setProperty('--excerpt-width',windowWidth+'px');
     timeline.style.setProperty('--excerpt-offset',(limit>span?(width-windowWidth)*position/(limit-span):0)+'px');
+    paintProgress();
   }
   function sync(){
     selectedTime.value=`${label(position)} — ${label(position+span)}`;
@@ -74,7 +84,7 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
   slider.addEventListener('pointerdown',event=>{if(event.button!==0||!event.isPrimary)return;pointer=event.pointerId;changed=false;prepare();});
   window.addEventListener('pointerup',event=>{if(pointer===event.pointerId){pointer=null;commit();}});
   window.addEventListener('pointercancel',event=>{if(pointer===event.pointerId)cancel();});
-  slider.addEventListener('input',()=>{stop();position=Math.max(0,Math.min(Number(slider.value),limit-span));value=selection();changed=true;sync();onChange?.();});
+  slider.addEventListener('input',()=>{stop();setProgress(0);position=Math.max(0,Math.min(Number(slider.value),limit-span));value=selection();changed=true;sync();onChange?.();});
   slider.addEventListener('change',()=>{if(pointer===null&&!keying)commit();});
   slider.addEventListener('keydown',event=>{
     if(!rangeKeys.includes(event.key))return;
@@ -93,8 +103,12 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
     configure(duration);
     if(pendingPlay||!audio.paused)audio.currentTime=position;
   });
-  audio.addEventListener('timeupdate',()=>{if(audio.currentTime>=position+span-.04){audio.pause();audio.currentTime=position;}});
-  audio.addEventListener('play',()=>showPlaying(true));audio.addEventListener('pause',()=>showPlaying(false));audio.addEventListener('ended',()=>showPlaying(false));
+  audio.addEventListener('timeupdate',()=>{
+    if(!nativeActive)return;
+    setProgress(audio.currentTime-position);
+    if(audio.currentTime>=position+span-.04){setProgress(span);nativeActive=false;audio.pause();audio.currentTime=position;}
+  });
+  audio.addEventListener('play',()=>{if(nativeActive)showPlaying(true);});audio.addEventListener('pause',()=>showPlaying(false));audio.addEventListener('ended',()=>{if(nativeActive)setProgress(span);nativeActive=false;showPlaying(false);});
   audio.addEventListener('error',()=>{if(full||!loaded)return;cancel();note.textContent='Não foi possível ouvir esta prévia. Sua seleção continua salva.';});
   async function loadAndPlay(){
     const token=generation,attempt=playGeneration;await load();
@@ -104,33 +118,33 @@ export function createAudioExcerpt({ host, musicDetails, stopPreview, onChange }
   details.addEventListener('toggle',()=>{if(details.open)void loadAndPlay();else cancel();});
   async function startPlayback(){
     if(!loaded||!details.open||controls.hidden||index===null||host.closest('dialog')?.open===false)return;
-    stopPreview();const token=generation,attempt=++playGeneration;pendingPlay=true;showPlaying(true);listen.setAttribute('aria-busy','true');
+    stopPreview();const token=generation,attempt=++playGeneration;setProgress(0);pendingPlay=true;showPlaying(true);listen.setAttribute('aria-busy','true');
     if(full){
       note.textContent='Arraste e solte para ouvir.';connect.hidden=true;
       value=selection();onChange?.();sdkActive=true;
-      try{await playSpotifyExcerpt(musicDetails[index],value,playing=>{if(token===generation&&attempt===playGeneration)showPlaying(playing);});}
+      try{await playSpotifyExcerpt(musicDetails[index],value,playing=>{if(token===generation&&attempt===playGeneration)showPlaying(playing);},seconds=>{if(token===generation&&attempt===playGeneration)setProgress(seconds);});}
       catch(error){if(token===generation&&attempt===playGeneration){sdkActive=false;showPlaying(false);note.textContent=error.message;connect.hidden=false;}}
       finally{if(token===generation&&attempt===playGeneration){pendingPlay=false;listen.removeAttribute('aria-busy');}}
       return;
     }
-    audio.currentTime=position;
+    nativeActive=true;audio.currentTime=position;
     try{await audio.play();}
-    catch{if(token===generation&&attempt===playGeneration){showPlaying(false);note.textContent='Não foi possível iniciar a prévia. Toque no play para tentar novamente.';}}
+    catch{if(token===generation&&attempt===playGeneration){nativeActive=false;showPlaying(false);note.textContent='Não foi possível iniciar a prévia. Toque no play para tentar novamente.';}}
     finally{if(token===generation&&attempt===playGeneration){pendingPlay=false;listen.removeAttribute('aria-busy');}}
   }
   listen.addEventListener('click',()=>{
     if(pendingPlay||!audio.paused||sdkPlaying)cancel();else void startPlayback();
   });
-  reset.addEventListener('click',()=>{cancel();value=null;configure(limit);onChange?.();});
+  reset.addEventListener('click',()=>{cancel();setProgress(0);value=null;configure(limit);onChange?.();});
   window.addEventListener('spotifychange',()=>{if(!full)return;generation++;cancel();loaded=false;loading=null;controls.hidden=true;if(details.open)void loadAndPlay();});
   document.addEventListener('ressoaplaybackstop',cancel);
   return {get value(){return value?{...value}:null;},stop:cancel,async alignTo(start){
     if(!Number.isFinite(start)||start<0||musicDetails[index]?.provider!=='spotify')return false;
     const token=generation;await load();if(token!==generation||!loaded||!full)return false;
-    cancel();span=Math.min(30,limit);position=Math.max(0,Math.min(start,limit-span));value=selection();configure(limit);
+    cancel();setProgress(0);span=Math.min(30,limit);position=Math.max(0,Math.min(start,limit-span));value=selection();configure(limit);
     const wasOpen=details.open;details.open=true;onChange?.();if(wasOpen)void startPlayback();return true;
   },set(track,excerpt=null){
-    generation++;cancel();index=track;loaded=false;loading=null;full=musicDetails[track]?.provider==='spotify';limit=30;span=30;position=0;connect.hidden=true;
+    generation++;cancel();setProgress(0);index=track;loaded=false;loading=null;full=musicDetails[track]?.provider==='spotify';limit=30;span=30;position=0;connect.hidden=true;
     value=excerpt?{...excerpt}:null;audio.removeAttribute('src');audio.load();controls.hidden=true;
     note.textContent=track===null?'Escolha uma música primeiro.':'Arraste para escolher o trecho de áudio.';
     prepare();if(details.open)void loadAndPlay();

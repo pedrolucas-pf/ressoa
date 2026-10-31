@@ -83,16 +83,24 @@ async function getPlayer(){
       instance.addListener('account_error',()=>fail('Este trecho exige uma conta Spotify Premium.'));
       instance.addListener('initialization_error',()=>fail('Seu navegador não conseguiu iniciar o Spotify.'));
       instance.addListener('autoplay_failed',()=>{stopSpotifyPlayback();document.dispatchEvent(new Event('ressoaplaybackstop'));notify('Toque no play para iniciar o Spotify.');});
-      instance.addListener('player_state_changed',state=>{
-        if(current&&state?.track_window?.current_track?.id===current.trackId){current.started=true;current.onState?.(!state.paused);if(state.position>=current.end*1000)void endClip();}
-      });
+      instance.addListener('player_state_changed',readClipState);
       instance.connect().then(connected=>{if(!connected)fail('Não foi possível conectar o player do Spotify.');}).catch(()=>fail('Não foi possível conectar o player do Spotify.'));
     });
   })().finally(()=>{playerJob=null;});return playerJob;
 }
+function readClipState(state){
+  const clip=current;if(!clip||state?.track_window?.current_track?.id!==clip.trackId||!Number.isFinite(state.position))return;
+  if(clip.finished){clip.onState?.(false);return;}
+  const age=Date.now()-clip.requestedAt;
+  // A seek can briefly report the position of the previously selected excerpt.
+  if(!clip.started&&age<10000&&(state.position<clip.start*1000-250||state.position>clip.start*1000+age+2000))return;
+  clip.started=true;clip.onState?.(!state.paused);
+  if(!clip.ending)clip.onProgress?.(Math.max(0,Math.min(clip.end-clip.start,state.position/1000-clip.start)));
+  if(state.position>=clip.end*1000)void endClip();
+}
 async function endClip(){
   if(!current||current.ending)return;
-  const clip=current;clip.ending=true;clearInterval(clock);clock=null;
+  const clip=current;clip.ending=true;clip.finished=true;clip.onProgress?.(clip.end-clip.start);clearInterval(clock);clock=null;
   const job=playQueue.catch(()=>{}).then(async()=>{if(current!==clip)return;await player?.pause();if(current===clip)await player?.seek(clip.start*1000);});playQueue=job.catch(()=>{});
   try{await job;}catch{stopSpotifyPlayback();}finally{if(current===clip){clip.onState?.(false);clip.ending=false;}}
 }
@@ -104,7 +112,7 @@ function activateSpotifyPlayback(){try{player?.activateElement()?.catch(()=>{});
 export function prepareSpotifyPlayback(){
   activateSpotifyPlayback();return getSpotifyStatus().then(status=>status.connected?getPlayer():null);
 }
-export function playSpotifyExcerpt(track,excerpt,onState){
+export function playSpotifyExcerpt(track,excerpt,onState,onProgress){
   activateSpotifyPlayback();
   const token=++revision;
   const job=playQueue.catch(()=>{}).then(async()=>{
@@ -115,11 +123,11 @@ export function playSpotifyExcerpt(track,excerpt,onState){
     clearInterval(clock);clock=null;current?.onState?.(false);current=null;
     await api('/api/spotify/play',{method:'POST',body:{trackId:track.spotifyId||track.id,deviceId:ready.deviceId,start:excerpt.start}});
     if(token!==revision){await ready.player.pause();return;}
-    current={trackId:track.spotifyId||track.id,start:excerpt.start,end:excerpt.end,onState,ending:false,started:false,requestedAt:Date.now()};onState?.(true);
+    current={trackId:track.spotifyId||track.id,start:excerpt.start,end:excerpt.end,onState,onProgress,ending:false,started:false,requestedAt:Date.now()};onProgress?.(0);onState?.(true);
     let checking=false;
     clock=setInterval(async()=>{
       if(checking||!current||token!==revision)return;checking=true;
-      try{const state=await player.getCurrentState();if(token!==revision||!current||!state)return;if(state.track_window?.current_track?.id!==current.trackId){if(current.started||Date.now()-current.requestedAt>10000)stopSpotifyPlayback();return;}current.started=true;onState?.(!state.paused);if(state.position>=current.end*1000)await endClip();}
+      try{const state=await player.getCurrentState();if(token!==revision||!current||!state)return;if(state.track_window?.current_track?.id!==current.trackId){if(current.started||Date.now()-current.requestedAt>10000)stopSpotifyPlayback();return;}readClipState(state);}
       catch{stopSpotifyPlayback();}finally{checking=false;}
     },200);
   });playQueue=job.catch(()=>{});return job;
