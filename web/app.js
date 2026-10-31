@@ -225,7 +225,8 @@ function renderStories(reset = false,preserveOrder = false) {
   $('#feed-empty').hidden = stories.length > 0;
   $('#story-viewport').hidden = stories.length === 0;
   document.querySelectorAll('.story.featured').forEach(story => { const post = stories.find(item => item.id === story.dataset.id); story.style.setProperty('--weekly-art', `url(${JSON.stringify(cover(post.track))})`); });
-  $('#story-progress').innerHTML = stories.map((post,index)=>`<button class="progress-step${post.featured?' featured-step':''}" data-index="${index}" aria-label="${escape(tracks[post.track].title)}"></button>`).join('');
+  const navigation=$('#story-progress');navigation.hidden=stories.length<2;navigation.style.setProperty('--feed-count',stories.length);
+  navigation.innerHTML = stories.map((post,index)=>`<button type="button" class="feed-step${post.featured?' featured-step':''}" data-index="${index}" aria-label="${post.featured?'Ressoa da semana':'Ressoa'} ${index+1} de ${stories.length}: ${escape(tracks[post.track].title)}"></button>`).join('');
   moveStory(storyIndex, false);
   scheduleTextLayout();
   return hasNew;
@@ -293,7 +294,7 @@ function moveStory(index, markSeen = true, fromScroll = false) {
   const focusInside=$('#story-track').contains(document.activeElement);
   positionStory(fromScroll);
   document.querySelectorAll('.story').forEach((story,i)=>{story.inert=i!==storyIndex;story.setAttribute('aria-hidden',String(i!==storyIndex));});
-  document.querySelectorAll('.progress-step').forEach((step,i)=>{step.classList.toggle('passed',i<storyIndex);if(i===storyIndex)step.setAttribute('aria-current','true');else step.removeAttribute('aria-current');});
+  document.querySelectorAll('.feed-step').forEach((step,i)=>{step.classList.toggle('passed',i<storyIndex);if(i===storyIndex)step.setAttribute('aria-current','true');else step.removeAttribute('aria-current');});
   $('#story-position').textContent=stories.length?`${tracks[stories[storyIndex].track].title} · ${authorHandle(stories[storyIndex])}`:'Sem publicações.';
   if(focusInside)$('#story-viewport').focus({preventScroll:true}); mountStoryPreview();
 }
