@@ -2,6 +2,7 @@
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 import { trackSummary } from './track-context.js';
 import { getSpotifyStatus, connectSpotify } from './spotify.js';
+import { searchCatalog } from './catalog.js';
 let pickerNumber = 0;
 
 export function createTrackPicker(host, { onChange, onPreview, onStop, onError, label = 'Música', artworkOnly = false }) {
@@ -46,10 +47,8 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
     cancel(); const token = generation; request = new AbortController();
     input.setAttribute('aria-busy', 'true'); status.textContent = 'Buscando…';more.disabled=true;if(!append)collapse();
     try {
-      const response = await fetch(`/api/search?${new URLSearchParams({ q: query,provider:source,offset:append&&nextOffset!==null?nextOffset:0 })}`, { signal: request.signal });
-      const data = await response.json();
+      const data = await searchCatalog(query,{provider:source,offset:append&&nextOffset!==null?nextOffset:0,signal:request.signal});
       if (token !== generation) return;
-      if (!response.ok) throw new Error(data.error || 'A busca está indisponível.');
       const found=(data.results || []).map(sanitizeTrack).filter(Boolean),unique=new Map((append?results:[]).map(track=>[track.catalogId,track]));found.forEach(track=>unique.set(track.catalogId,track));results=[...unique.values()];
       nextOffset=Number.isInteger(data.nextOffset)?data.nextOffset:null;
       status.textContent = results.length ? `${results.length} resultados · ${data.provider === 'spotify' ? 'Spotify' : 'Deezer'}` : 'Não encontrou? Tente o título com o artista ou cole o link da faixa.';
@@ -58,7 +57,7 @@ export function createTrackPicker(host, { onChange, onPreview, onStop, onError, 
       more.hidden=nextOffset===null;
     } catch (error) {
       if (error.name === 'AbortError' || token !== generation) return;
-      status.replaceChildren(document.createTextNode('Não foi possível buscar. '));
+      status.replaceChildren(document.createTextNode((error.message||'Não foi possível buscar.')+' '));
       const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Tentar novamente'; retry.onclick = () => search(query,append); status.append(retry);
     } finally { if (token === generation) {input.removeAttribute('aria-busy');more.disabled=false;} }
   }

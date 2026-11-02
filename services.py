@@ -1,5 +1,6 @@
 ﻿"""Small read-only integrations. No account tokens, audio downloads, or lyric files."""
 import json
+import logging
 import re
 import random
 import time
@@ -17,20 +18,22 @@ _LOCK = Lock()
 class ServiceError(Exception):
     pass
 
-def _get(url, *, accept='application/json'):
+def _get(url, *, accept='application/json', timeout=12):
     request = Request(url, headers={'User-Agent': 'Ressoa/0.6 (https://ressoa.onrender.com)', 'Accept': accept})
     try:
-        with urlopen(request, timeout=12) as response:
+        with urlopen(request, timeout=timeout) as response:
             return response.read(4_000_000).decode('utf-8')
     except HTTPError as error:
         if error.code == 404:
             return None
+        logging.warning('Music service request failed: host=%s status=%s',urlparse(url).hostname,error.code)
         raise ServiceError('O serviço de música está temporariamente indisponível.') from error
     except (OSError, ValueError) as error:
+        logging.warning('Music service request failed: host=%s error=%s',urlparse(url).hostname,type(error).__name__)
         raise ServiceError('Não foi possível consultar o serviço de música.') from error
 
-def _json(url):
-    text = _get(url)
+def _json(url, *, timeout=12):
+    text = _get(url,timeout=timeout)
     if text is None:
         return None
     try:
@@ -38,11 +41,11 @@ def _json(url):
     except ValueError as error:
         raise ServiceError('O serviço devolveu uma resposta inválida.') from error
 
-def _cached(key, callback):
+def _cached(key, callback, *, refresh=False):
     now = time.monotonic()
     with _LOCK:
         item = _CACHE.get(key)
-        if item and item[0] > now:
+        if item and item[0] > now and not refresh:
             return item[1]
     value = callback()
     with _LOCK:
@@ -126,7 +129,7 @@ def search_tracks(query,offset=0):
     if direct:return dict(results=[get_track('deezer:'+direct.group(1))] if not offset else [],provider='deezer',nextOffset=None)
     if query.startswith(('http://','https://')):raise ValueError('Use o link de uma faixa do Spotify ou Deezer.')
     def fetch():
-        data = _json('https://api.deezer.com/search?' + urlencode({'q': query, 'limit': 20,'index':offset}))
+        data = _json('https://api.deezer.com/search?' + urlencode({'q': query, 'limit': 20,'index':offset}),timeout=4)
         if not isinstance(data, dict) or 'error' in data:
             raise ServiceError('A busca de músicas está indisponível.')
         raw=list(data.get('data') or []);has_more=bool(data.get('next'))
@@ -134,7 +137,7 @@ def search_tracks(query,offset=0):
         simplified=re.sub(r'\s*[-–—]\s*',' ',simplified)
         if len(raw)<4 and simplified!=query:
             try:
-                extra=_json('https://api.deezer.com/search?'+urlencode(dict(q=simplified,limit=20,index=offset)))
+                extra=_json('https://api.deezer.com/search?'+urlencode(dict(q=simplified,limit=20,index=offset)),timeout=4)
                 if isinstance(extra,dict) and not extra.get('error'):raw.extend(extra.get('data') or []);has_more=has_more or bool(extra.get('next'))
             except ServiceError:pass
         results={}
@@ -144,16 +147,16 @@ def search_tracks(query,offset=0):
         return {'results': list(results.values()), 'provider': 'deezer','nextOffset':offset+20 if has_more and offset<240 else None}
     return _cached(('search', query.casefold(),offset), fetch)
 
-def get_track(catalog_id):
+def get_track(catalog_id, *, refresh=False):
     match = re.fullmatch(r'deezer:([0-9]{1,16})', catalog_id)
     if not match:
         raise ValueError('Faixa inválida.')
     def fetch():
-        data = _json(f'https://api.deezer.com/track/{match.group(1)}')
+        data = _json(f'https://api.deezer.com/track/{match.group(1)}',timeout=4)
         if not data or 'error' in data:
             raise ValueError('Faixa não encontrada.')
         return deezer_track(data)
-    return _cached(('track', catalog_id), fetch)
+    return _cached(('track', catalog_id), fetch,refresh=refresh)
 
 def _normalize(value):
     value = re.sub(r'\s+-\s+(?:remix(?:ed)?|remaster(?:ed)?|original album).*$', '', value, flags=re.I)

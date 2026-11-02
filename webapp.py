@@ -253,7 +253,7 @@ class Application:
                 else:payload = search_tracks(query,offset)
             elif path == '/api/track':
                 identifier=value('id')
-                payload=self.spotify.track(user_id,identifier.split(':',1)[1]) if identifier.startswith('spotify:') and self.spotify.connection(user_id) else get_track(identifier)
+                payload=self.spotify.track(user_id,identifier.split(':',1)[1]) if identifier.startswith('spotify:') and self.spotify.connection(user_id) else get_track(identifier,refresh=value('refresh')=='1')
                 self.db.cache_verified_track(payload)
             else:
                 payload = lyrics(value('title'), value('artist'), value('album'), value('duration', '0'))

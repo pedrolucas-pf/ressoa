@@ -281,6 +281,7 @@ textObserver.observe($('#story-viewport'));textObserver.observe($('#profile-cont
 textObserver.observe($('#diary-entries'));
 document.fonts.ready.then(scheduleTextLayout);
 function moveStory(index, markSeen = true, fromScroll = false) {
+  if(!fromScroll)cancelWheelGesture();
   if(markSeen&&feedRefreshJob)return;
   if(markSeen&&stories.length&&index>=stories.length){
     void refreshFeedBatch(true);return;
@@ -320,6 +321,7 @@ $('#feed-filters').addEventListener('keydown',event=>{
 $('#feed-find-people').addEventListener('click',()=>{if($('#people-search').dataset.open!=='true')$('#toggle-people-search').click();$('#people-query').focus();});
 function refreshFeedBatch(wrap=false) {
  if(feedRefreshJob)return feedRefreshJob;
+  cancelWheelGesture();
  clearSwipeCorrection();clearPullIndicator();
  if(stories[storyIndex]){rememberSeen(social,stories[storyIndex].id);void saveSeen(social.seen);}
  const mode=feedMode,current=new Map(stories.map(post=>[post.id,post.publishedAt||post.createdAt]));
@@ -369,7 +371,7 @@ async function toggleSave(id) {
 
 // Native vertical scrolling is shared by all devices.
 let lastGesture = 0;
-let scrollFrame, swipeCorrection=null,swipeCorrectionTimer,mobileTouch=null,lastWheelAt=0,wheelStartedAtEnd=false,wheelStartedAtStart=false;
+let scrollFrame, swipeCorrection=null,swipeCorrectionTimer,mobileTouch=null,wheelGesture=null,wheelTimer,wheelIgnoreUntil=0;
 const atFeedEnd=()=>stories.length>0&&storyIndex===stories.length-1&&viewport.scrollTop>=storyScrollTop(stories.length-1)-3;
 const atFeedStart=()=>stories.length>0&&storyIndex===0&&viewport.scrollTop<=3;
 function clearPullIndicator() {
@@ -400,6 +402,7 @@ viewport.addEventListener('scroll',()=>{
   });
 },{passive:true});
 viewport.addEventListener('touchstart',event=>{
+  cancelWheelGesture();
   clearSwipeCorrection();clearPullIndicator();cancelStorySnap();
   mobileTouch=event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY,index:storyIndex,atStart:atFeedStart(),atEnd:atFeedEnd()}:null;
 },{passive:true});
@@ -429,15 +432,36 @@ textObserver.observe($('.header'));
 viewport.addEventListener('click', event => {
  const more=event.target.closest('.read-more');if(more)openPost(more.dataset.read);
 });
-viewport.addEventListener('wheel', event => {
- const now=Date.now();
- if(now-lastWheelAt>250){wheelStartedAtEnd=atFeedEnd();wheelStartedAtStart=atFeedStart();}
- lastWheelAt=now;
- if(wheelStartedAtEnd&&atFeedEnd()&&event.deltaY>40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
-  event.preventDefault();wheelStartedAtEnd=false;lastGesture=now;void refreshFeedBatch(true);
- }else if(wheelStartedAtStart&&atFeedStart()&&event.deltaY<-40&&Math.abs(event.deltaY)>Math.abs(event.deltaX)&&now-lastGesture>450){
-  event.preventDefault();wheelStartedAtStart=false;lastGesture=now;void refreshFeedBatch();
+function cancelWheelGesture(){
+ clearTimeout(wheelTimer);wheelGesture=null;
+ if(!storySnapTarget)viewport.style.removeProperty('scroll-snap-type');
+}
+function finishWheelGesture(){
+ const gesture=wheelGesture;wheelGesture=null;
+ if(!gesture||page!=='foryou'||feedRefreshJob||document.querySelector('dialog[open]')||stories[gesture.from]?.id!==gesture.id){cancelWheelGesture();return;}
+ let target=storyIndex;
+ if(target===gesture.from&&Math.abs(gesture.amount)>=45)target=Math.max(0,Math.min(stories.length-1,gesture.from+Math.sign(gesture.amount)));
+ if(target!==storyIndex)moveStory(target,true,true);
+ scrollToStory(target,!matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+document.addEventListener('wheel', event => {
+ if(page!=='foryou'||!stories.length||document.querySelector('dialog[open]')||event.ctrlKey||event.metaKey||event.shiftKey||event.target.closest('input,textarea,select,[contenteditable="true"],.people-search-panel')||Math.abs(event.deltaY)<=Math.abs(event.deltaX))return;
+ const now=Date.now(),unit=event.deltaMode===1?(parseFloat(getComputedStyle(viewport).lineHeight)||20):event.deltaMode===2?viewport.clientHeight:1;
+ if(now<wheelIgnoreUntil){event.preventDefault();wheelIgnoreUntil=now+220;return;}
+ if(feedRefreshJob)return;
+ const amount=event.deltaY*unit;
+ if(!wheelGesture||now-wheelGesture.last>200){
+  cancelStorySnap();clearSwipeCorrection();
+  wheelGesture={from:storyIndex,id:stories[storyIndex]?.id,amount:0,last:now,atStart:atFeedStart(),atEnd:atFeedEnd()};
  }
+ const gesture=wheelGesture;gesture.last=now;gesture.amount+=amount;
+ viewport.style.scrollSnapType='none';
+ if(now-lastGesture>450&&((gesture.atEnd&&atFeedEnd()&&gesture.amount>=75)||(gesture.atStart&&atFeedStart()&&gesture.amount<=-75))){
+  event.preventDefault();wheelIgnoreUntil=now+220;lastGesture=now;void refreshFeedBatch(gesture.atEnd&&gesture.amount>0);return;
+ }
+ // Wheel events outside the card still move the feed, rather than the page behind it.
+ if(!viewport.contains(event.target)){event.preventDefault();viewport.scrollBy({top:amount,behavior:'instant'});}
+ clearTimeout(wheelTimer);wheelTimer=setTimeout(finishWheelGesture,140);
 }, { passive: false });
 
 document.addEventListener('keydown', event => {
@@ -482,6 +506,7 @@ $('#diary-entries').addEventListener('click', event => {
   if (feature) setWeekly(feature.dataset.weekly);
 });
 function route() {
+  cancelWheelGesture();
   stopPreview();
   peopleSearch.close();
   let postTarget=null;

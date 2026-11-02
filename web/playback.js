@@ -38,28 +38,52 @@ export function createPlayback({ tracks, musicDetails, toast }) {
   }
   function nativeAudio(detail, button, inline = false, index, excerpt = null) {
     const player = document.createElement('audio'); player.preload = 'none'; player.volume = .5;
-    if (detail.previewUrl) player.src = detail.previewUrl;
     audio = player;
+    const savedPreview=detail.previewUrl;
+    let desired=false,retried=false,recovery=null;
+    const usePreview=url=>{
+      try{const value=new URL(url);if(value.protocol==='https:'&&(value.hostname==='dzcdn.net'||value.hostname.endsWith('.dzcdn.net'))){player.src=value.href;return true;}}catch{}
+      player.removeAttribute('src');return false;
+    };
     const bounds=()=>({start:Math.min(excerpt?.start||0,Math.max(0,(player.duration||30)-1)),end:Math.min(excerpt?.end||30,player.duration||30)});
     player.addEventListener('loadedmetadata',()=>{if(excerpt)player.currentTime=bounds().start;});
-    player.addEventListener('timeupdate',()=>{if(excerpt&&player.currentTime>=bounds().end-.04){player.pause();player.currentTime=bounds().start;}});
+    player.addEventListener('timeupdate',()=>{if(excerpt&&player.currentTime>=bounds().end-.04){desired=false;player.pause();player.currentTime=bounds().start;}});
     const metadata=ensureTrackDetails(index).then(track=>{
       if(audio!==player)return;
-      if(player.paused&&track?.previewUrl){const url=new URL(track.previewUrl);if(url.protocol==='https:'&&url.hostname.endsWith('.dzcdn.net'))player.src=url.href;}
+      usePreview(track?.previewUrl);
       const caption=button.parentElement?.querySelector('.native-track-context');if(caption)caption.textContent=trackSummary(index);
-    }).catch(()=>{});
+    }).catch(()=>{if(audio===player)usePreview(savedPreview);});
+    function blocked(error){
+      if(error?.name!=='NotAllowedError')return false;
+      desired=false;state(button,false);toast('Toque no play novamente para liberar o áudio neste navegador.');return true;
+    }
+    function recover(){
+      if(recovery)return recovery;
+      if(retried){desired=false;state(button,false);toast('Prévia indisponível para esta gravação. Tente novamente.');return;}
+      retried=true;button.setAttribute('aria-busy','true');
+      recovery=(async()=>{
+        try{
+          const track=await ensureTrackDetails(index,{refresh:true});
+          if(audio!==player)return;
+          if(!usePreview(track?.previewUrl))throw new Error('Prévia indisponível.');
+          player.load();if(desired)await player.play();
+        }catch(error){if(audio===player&&desired&&!blocked(error)){desired=false;state(button,false);toast('Não foi possível reproduzir esta prévia. Tente novamente.');}}
+        finally{if(audio===player)button.removeAttribute('aria-busy');recovery=null;}
+      })();return recovery;
+    }
     const toggle = async event => {
       event.stopPropagation();
+      desired=!desired;if(!desired){player.pause();return;}retried=false;
       if (!player.src) { button.setAttribute('aria-busy','true');await metadata;button.removeAttribute('aria-busy'); }
-      if(audio!==player)return;
-      if (!player.src) { toast('Prévia indisponível para esta gravação.'); return; }
-      try { if (player.paused) {if(excerpt&&(player.currentTime<bounds().start||player.currentTime>=bounds().end-.04))player.currentTime=bounds().start;await player.play();} else player.pause(); }
-      catch { if (audio === player) toast('Não foi possível reproduzir o trecho.'); }
+      if(audio!==player||!desired)return;
+      if (!player.src) { desired=false;toast('Prévia indisponível para esta gravação.'); return; }
+      try {if(excerpt&&(player.currentTime<bounds().start||player.currentTime>=bounds().end-.04))player.currentTime=bounds().start;await player.play();}
+      catch(error){if(audio===player&&desired&&!blocked(error))await recover();}
     };
     if(inline)button.onclick=toggle;else coverToggle=toggle;
     const sync = () => { if (inline) { button.setAttribute('aria-pressed', String(!player.paused)); button.textContent = player.paused ? '▶ Ouvir trecho' : 'Ⅱ Pausar trecho'; } else state(button, !player.paused); };
-    player.addEventListener('play', sync); player.addEventListener('pause', sync); player.addEventListener('ended', sync);
-    player.addEventListener('error', () => { if (audio === player) { state(button, false); toast('Prévia indisponível. Tente novamente.'); } });
+    player.addEventListener('play', sync); player.addEventListener('pause', sync); player.addEventListener('ended',()=>{desired=false;sync();});
+    player.addEventListener('error', () => {if(audio===player&&desired)void recover();});
     return player;
   }
   async function mountCoverPlayer(button, index, excerpt = null) {
