@@ -648,7 +648,7 @@ function openComposer(id = null) {
  form.reset();composerPicker.reset();form.elements.reflection.setCustomValidity('');
  if(typeof draft?.text==='string')form.elements.reflection.value=draft.text;
  if(Number.isInteger(draft?.track)&&tracks[draft.track])composerPicker.setSelection(draft.track,false);
- if(draft?.visibility==='public')form.elements.visibility.value='public';
+ if(['public','private'].includes(draft?.visibility))form.elements.visibility.value=draft.visibility;
  form.elements.lyricExcerpt.value=draft?.lyricExcerpt||'';renderExcerptChoice('entry');
  entryAudio.set(composerPicker.value,draft?.audioExcerpt||null);
  $('#composer-title').textContent=editingId?'Editar ressoa':'Escrever uma ressoa';$('#entry-form [type="submit"]').textContent=editingId?'Salvar alterações':'Salvar ressoa';$('#composer').showModal();
