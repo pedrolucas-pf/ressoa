@@ -52,10 +52,8 @@ main { max-width: 1440px; padding: 0 64px; margin: auto; }
 #for-you::before {content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;background:url('assets/vinyl-ambience.jpg') center 55%/cover no-repeat;opacity:.16;mix-blend-mode:screen;mask-image:radial-gradient(ellipse 90% 70% at 65% 55%,#000 25%,transparent 80%);}
 #for-you.weekly-view::before {opacity:0;}
 .feed-stage{position:relative;}
-.feed-navigation{position:absolute;top:50%;right:-36px;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;width:28px;height:min(calc(var(--feed-count,1) * 24px + 72px),calc(100% - 24px));}
+.feed-navigation{position:absolute;top:50%;right:-36px;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;width:24px;height:min(calc(var(--feed-count,1) * 24px),calc(100% - 24px));}
 .feed-positions{display:flex;flex-direction:column;flex:1;min-height:0;width:24px;}
-.feed-navigation .feed-direction{width:28px;height:28px;flex-shrink:0;border:0;color:var(--muted);}
-.feed-navigation .feed-direction:not(:disabled):hover{color:var(--text);}
 .feed-step{flex:1;min-height:0;width:24px;padding:0;display:grid;place-items:center;border-radius:12px;}
 .feed-step::after{content:'';display:block;width:5px;height:5px;border-radius:4px;background:var(--border);transition:height .18s,background .18s;}
 .feed-step.passed::after{background:var(--muted);}
@@ -65,9 +63,8 @@ main { max-width: 1440px; padding: 0 64px; margin: auto; }
 @media(hover:hover){.feed-step:hover::after{background:var(--text);}}
 @media(max-width:1050px){.feed-navigation{right:-28px;}}
 @media(max-width:640px){
- .feed-navigation{right:-21px;width:22px;gap:0;height:min(calc(var(--feed-count,1) * 24px),calc(100% - 24px));}
+ .feed-navigation{right:-21px;width:22px;}
  .feed-positions{width:100%;}
- .feed-navigation .feed-direction{display:none;}
  .feed-step{width:22px;}
 }
 @media(prefers-reduced-motion:reduce){.feed-step::after{transition:none;}}
