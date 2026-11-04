@@ -174,10 +174,10 @@ function resizeStoryViewport() {
     scrollToStory(storySnapTarget?.index??storyIndex);
   }
 }
-function positionStory(fromScroll=false) {
+function positionStory(fromScroll=false,smooth=false) {
   $('#story-track').style.removeProperty('transform');
   resizeStoryViewport();
-  if(!fromScroll)scrollToStory(storyIndex);
+  if(!fromScroll)scrollToStory(storyIndex,smooth);
 }
 
 function authorMarkup(post) {
@@ -227,7 +227,7 @@ function renderStories(reset = false,preserveOrder = false) {
   $('#feed-empty').hidden = stories.length > 0;
   $('#story-viewport').hidden = stories.length === 0;
   document.querySelectorAll('.story.featured').forEach(story => { const post = stories.find(item => item.id === story.dataset.id); story.style.setProperty('--weekly-art', `url(${JSON.stringify(cover(post.track))})`); });
-  const navigation=$('#story-progress');navigation.hidden=stories.length<2;navigation.style.setProperty('--feed-count',stories.length);
+  const navigation=$('#story-progress');$('#feed-navigation').hidden=stories.length<2;$('#feed-navigation').style.setProperty('--feed-count',stories.length);
   navigation.innerHTML = stories.map((post,index)=>`<button type="button" class="feed-step${post.featured?' featured-step':''}" data-index="${index}" aria-label="${post.featured?'Ressoa da semana':'Ressoa'} ${index+1} de ${stories.length}: ${escape(tracks[post.track].title)}"></button>`).join('');
   moveStory(storyIndex, false);
   scheduleTextLayout();
@@ -280,7 +280,12 @@ const textObserver=new ResizeObserver(scheduleTextLayout);
 textObserver.observe($('#story-viewport'));textObserver.observe($('#profile-content'));
 textObserver.observe($('#diary-entries'));
 document.fonts.ready.then(scheduleTextLayout);
-function moveStory(index, markSeen = true, fromScroll = false) {
+function updateFeedNavigation() {
+  $('#previous-story').disabled=Boolean(feedRefreshJob)||storyIndex===0||!stories.length;
+  $('#next-story').disabled=Boolean(feedRefreshJob)||!stories.length;
+  $('#next-story').title=storyIndex===stories.length-1?'Atualizar e voltar ao início':'Próximo Ressoa';
+}
+function moveStory(index, markSeen = true, fromScroll = false, smooth = false) {
   if(!fromScroll)cancelWheelGesture();
   if(markSeen&&feedRefreshJob)return;
   if(markSeen&&stories.length&&index>=stories.length){
@@ -295,13 +300,16 @@ function moveStory(index, markSeen = true, fromScroll = false) {
   stopPreview(); storyIndex=next;
   $('#for-you').classList.toggle('weekly-view',Boolean(stories[storyIndex]?.featured));
   const focusInside=$('#story-track').contains(document.activeElement);
-  positionStory(fromScroll);
+  positionStory(fromScroll,smooth);
+  updateFeedNavigation();
   document.querySelectorAll('.story').forEach((story,i)=>{story.inert=i!==storyIndex;story.setAttribute('aria-hidden',String(i!==storyIndex));});
   document.querySelectorAll('.feed-step').forEach((step,i)=>{step.classList.toggle('passed',i<storyIndex);if(i===storyIndex)step.setAttribute('aria-current','true');else step.removeAttribute('aria-current');});
   $('#story-position').textContent=stories.length?`${tracks[stories[storyIndex].track].title} · ${authorHandle(stories[storyIndex])}`:'Sem publicações.';
   if(focusInside)$('#story-viewport').focus({preventScroll:true}); mountStoryPreview();
 }
 $('#story-progress').addEventListener('click',event=>{const step=event.target.closest('[data-index]');if(step)moveStory(Number(step.dataset.index));});
+$('#previous-story').addEventListener('click',()=>moveStory(storyIndex-1,true,false,true));
+$('#next-story').addEventListener('click',()=>moveStory(storyIndex+1,true,false,true));
 function selectFeed(mode) {
  if(!['foryou','following'].includes(mode)||mode===feedMode)return;
  clearSwipeCorrection();clearPullIndicator();
@@ -337,8 +345,9 @@ function refreshFeedBatch(wrap=false) {
    if(changed)renderStories(true);
    else{renderStories(false,true);if(wrap)moveStory(0,false);if(!wrap)toast('Nenhum Ressoa novo.');}
   }catch(error){if(wrap&&mode===feedMode)moveStory(0,false);toast(error.message);}
-  finally{button.disabled=false;button.removeAttribute('aria-busy');$('#story-viewport').removeAttribute('aria-busy');feedRefreshJob=null;}
+  finally{button.disabled=false;button.removeAttribute('aria-busy');$('#story-viewport').removeAttribute('aria-busy');feedRefreshJob=null;updateFeedNavigation();}
  })();
+ updateFeedNavigation();
  return feedRefreshJob;
 }
 $('#refresh-feed').addEventListener('click',()=>void refreshFeedBatch());
@@ -519,6 +528,7 @@ function route() {
   if(target!==visitedId){profileRequest?.abort();profileGeneration++;visitedId=target;visitedProfile=null;profileError='';}
   // Existing #descobrir and #guardadas links remain usable.
   page = location.hash === '#perfil'||location.hash.startsWith(prefix) ? 'perfil' : ['diario', 'guardadas'].includes(location.hash.slice(1)) ? 'diario' : 'foryou';
+  document.body.classList.toggle('feed-open',page==='foryou');
   if (location.hash === '#guardadas') collection = 'saved';
   $('#for-you').hidden = page !== 'foryou';
   $('#diary').hidden = page !== 'diario';

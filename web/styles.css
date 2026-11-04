@@ -13,6 +13,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 var(--sans); }
+body.feed-open:not(.auth-open) { height: 100dvh; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 button { cursor: pointer; background: none; border: 0; }
@@ -50,8 +51,10 @@ main { max-width: 1440px; padding: 0 64px; margin: auto; }
 #for-you {position:relative;isolation:isolate;}
 #for-you::before {content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;background:url('assets/vinyl-ambience.jpg') center 55%/cover no-repeat;opacity:.16;mix-blend-mode:screen;mask-image:radial-gradient(ellipse 90% 70% at 65% 55%,#000 25%,transparent 80%);}
 #for-you.weekly-view::before {opacity:0;}
-.feed-stage{position:relative;}
-.feed-navigation{position:absolute;top:50%;right:-36px;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;width:24px;height:min(calc(var(--feed-count,1) * 24px),calc(100% - 24px));}
+.feed-stage{position:relative;padding-right:60px;}
+.feed-navigation{position:absolute;top:50%;right:0;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:12px;width:44px;}
+.feed-positions{display:none;}
+.feed-direction{background:var(--bg);}
 .feed-step{flex:1;min-height:0;width:24px;padding:0;display:grid;place-items:center;border-radius:12px;}
 .feed-step::after{content:'';display:block;width:5px;height:5px;border-radius:4px;background:var(--border);transition:height .18s,background .18s;}
 .feed-step.passed::after{background:var(--muted);}
@@ -59,8 +62,13 @@ main { max-width: 1440px; padding: 0 64px; margin: auto; }
 .feed-step[aria-current="true"]::after{height:18px;background:var(--text);box-shadow:none;}
 .feed-step:focus-visible{outline-offset:0;}
 @media(hover:hover){.feed-step:hover::after{background:var(--text);}}
-@media(max-width:1050px){.feed-navigation{right:-28px;}}
-@media(max-width:640px){.feed-navigation{right:-21px;width:22px;}.feed-step{width:22px;}}
+@media(max-width:640px){
+ .feed-stage{padding-right:0;}
+ .feed-navigation{right:-21px;width:22px;height:min(calc(var(--feed-count,1) * 24px),calc(100% - 24px));}
+ .feed-positions{display:flex;flex-direction:column;width:100%;height:100%;}
+ .feed-navigation .feed-direction{display:none;}
+ .feed-step{width:22px;}
+}
 @media(prefers-reduced-motion:reduce){.feed-step::after{transition:none;}}
 #refresh-feed[aria-busy="true"] svg {animation:refresh-spin 1s linear infinite;}
 @keyframes refresh-spin {to{transform:rotate(360deg);}}
@@ -223,7 +231,7 @@ form > .button { width: 100%; margin-top: 23px; }
 .spotify-attribution img { width: 74px; height: 23px; object-fit: contain; }
 .avatar { overflow: hidden; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
-#for-you { padding-bottom: 40px; }
+#for-you { padding-bottom: 0; }
 .weekly-preview > .cover-open { width: 48px; flex: 0 0 48px; }
 .weekly-preview .spotify-attribution { margin-top: 2px; }
 #music-dialog { width: min(760px, calc(100% - 32px)); }
@@ -336,7 +344,6 @@ form .picker-search input.catalog-query[type="search"] { min-width: 0; margin: 0
   .preview-time { font-size: 9px; }
 }
 @media (max-width: 640px) {
-  #for-you { padding-bottom: 25px; }
   .story { height: calc(100dvh - 220px); min-height: 430px; padding-bottom: 104px; }
   .story > .story-art { position: static; }
   .story-preview { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; }
@@ -642,11 +649,6 @@ body.profile-background::before {content:'';position:fixed;inset:0;z-index:-1;ba
   scrollbar-width:none;scroll-behavior:auto;-webkit-overflow-scrolling:touch;
  }
  #for-you .story-viewport::-webkit-scrollbar{display:none;}
- @media(hover:hover) and (pointer:fine){
-  #for-you .story-viewport{scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
-  #for-you .story-viewport::-webkit-scrollbar{display:block;width:6px;}
-  #for-you .story-viewport::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px;}
- }
  #for-you .story-track{display:block;transform:none!important;transition:none;}
  #for-you .story,#for-you .story.featured{
   height:var(--feed-height,calc(100dvh - 245px));min-height:220px;
