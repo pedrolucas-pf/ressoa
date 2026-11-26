@@ -1,0 +1,186 @@
+"""One-to-one conversations. Private messages never become diary or feed posts."""
+import base64
+import json
+import re
+import uuid
+from datetime import datetime
+from database import APIError, clean_track, now_iso, text
+
+
+class Messaging:
+    def __init__(self, database):
+        self.db = database
+
+    @staticmethod
+    def identifier(value):
+        if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value):
+            raise APIError(400, 'Mensagem inválida.')
+        return value
+
+    @staticmethod
+    def cursor(value):
+        if not value:
+            return None
+        try:
+            if not isinstance(value, str) or len(value) > 400 or not re.fullmatch(r'[A-Za-z0-9_-]+', value):
+                raise ValueError()
+            parts = json.loads(base64.urlsafe_b64decode(value + '=' * (-len(value) % 4)))
+            if not isinstance(parts, list) or len(parts) != 2 or any(not isinstance(v, str) for v in parts):
+                raise ValueError()
+            if len(parts[0]) > 50 or not datetime.fromisoformat(parts[0]).tzinfo:
+                raise ValueError()
+            Messaging.identifier(parts[1])
+            return tuple(parts)
+        except (ValueError, TypeError, UnicodeError):
+            raise APIError(400, 'Reabra a conversa para atualizar as mensagens.') from None
+
+    @staticmethod
+    def encode_cursor(timestamp, identifier):
+        return base64.urlsafe_b64encode(json.dumps([timestamp, identifier]).encode()).decode().rstrip('=')
+
+    def person(self, db, user_id, target):
+        target = self.identifier(target)
+        row = db.execute('SELECT id,username,display_name,photo FROM users WHERE id=?', (target,)).fetchone()
+        if not row or target == user_id:
+            raise APIError(404, 'Escolha outra pessoa para conversar.')
+        return self.db.person(row)
+
+    @staticmethod
+    def thread(db, user_id, target):
+        a, b = sorted((user_id, target))
+        return db.execute('SELECT id FROM dm_threads WHERE user_a=? AND user_b=?', (a, b)).fetchone()
+
+    @staticmethod
+    def summary_query(user_id):
+        return ('''SELECT messages_version AS version,
+            (SELECT COUNT(*) FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
+             WHERE (t.user_a=? OR t.user_b=?) AND m.sender_id<>? AND m.read_at IS NULL) AS unread_count
+            FROM users WHERE id=?''', (user_id, user_id, user_id, user_id))
+
+    def summary(self, user_id, db=None):
+        if db is None:
+            with self.db.connect() as connection:
+                return self.summary(user_id, connection)
+        row = db.execute(*self.summary_query(user_id)).fetchone()
+        return dict(version=row['version'], unreadCount=row['unread_count'])
+
+    def inbox(self, user_id, cursor=''):
+        before = self.cursor(cursor)
+        restriction = ' AND (m.created_at,t.id)<(?,?)' if before else ''
+        params = (user_id, user_id, user_id, user_id, user_id, *(before or ()))
+        with self.db.connect() as db:
+            db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN')
+            rows = db.execute(f'''SELECT t.id AS thread_id,m.created_at,m.kind,m.text,m.sender_id,
+                u.id,u.username,u.display_name,u.photo,
+                (SELECT COUNT(*) FROM dm_messages n WHERE n.thread_id=t.id AND n.sender_id<>? AND n.read_at IS NULL) AS unread_count
+                FROM dm_threads t JOIN users u ON u.id=CASE WHEN t.user_a=? THEN t.user_b ELSE t.user_a END
+                JOIN dm_messages m ON m.id=(SELECT id FROM dm_messages WHERE thread_id=t.id ORDER BY created_at DESC,id DESC LIMIT 1)
+                WHERE (t.user_a=? OR t.user_b=?) AND u.id<>? {restriction}
+                ORDER BY m.created_at DESC,t.id DESC LIMIT 31''', params).fetchall()
+            items = [dict(person=self.db.person(row), updatedAt=row['created_at'], unreadCount=row['unread_count'],
+                          preview=row['text'][:120] if row['kind'] == 'text' else 'Enviou um Ressoa',
+                          sentByMe=row['sender_id'] == user_id) for row in rows[:30]]
+            next_cursor = self.encode_cursor(rows[29]['created_at'], rows[29]['thread_id']) if len(rows) > 30 else None
+            return dict(items=items, nextCursor=next_cursor, summary=self.summary(user_id, db))
+
+    def message(self, db, user_id, row):
+        result = dict(id=row['id'], senderId=row['sender_id'], kind=row['kind'], text=row['text'],
+                      createdAt=row['created_at'], readAt=row['read_at'], post=None, unavailable=False)
+        if row['kind'] == 'ressoa':
+            result['post'] = dict(json.loads(row['payload']), id=row['id'], ownerId=row['sender_id'], kind='direct', visibility='direct')
+        elif row['kind'] == 'post':
+            try:
+                if not row['post_id']:
+                    raise APIError(404, 'Ressoa indisponível.')
+                post = self.db.accessible(db, user_id, row['post_id'])
+                result['post'] = self.db.post(db, post)
+            except APIError as error:
+                if error.status not in (403, 404):
+                    raise
+                result['unavailable'] = True
+        return result
+
+    def conversation(self, user_id, target, cursor=''):
+        before = self.cursor(cursor)
+        with self.db.connect() as db:
+            db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN')
+            person = self.person(db, user_id, target)
+            thread = self.thread(db, user_id, target)
+            if not thread:
+                return dict(person=person, items=[], nextCursor=None, summary=self.summary(user_id, db))
+            restriction = ' AND (created_at,id)<(?,?)' if before else ''
+            rows = db.execute(f'''SELECT * FROM dm_messages WHERE thread_id=? {restriction}
+                ORDER BY created_at DESC,id DESC LIMIT 51''', (thread['id'], *(before or ()))).fetchall()
+            next_cursor = self.encode_cursor(rows[49]['created_at'], rows[49]['id']) if len(rows) > 50 else None
+            return dict(person=person, items=[self.message(db, user_id, row) for row in reversed(rows[:50])],
+                        nextCursor=next_cursor, summary=self.summary(user_id, db))
+
+    def ressoa_payload(self, value):
+        if not isinstance(value, dict):
+            raise APIError(400, 'Selecione uma música para o Ressoa.')
+        track = clean_track(value.get('track'))
+        audio = self.db.clean_audio_excerpt(value.get('audioExcerpt'), track)
+        if audio and track['provider'] != 'deezer' and audio.get('source') != 'spotify':
+            raise APIError(400, 'Escolha uma prévia ou um trecho do Spotify conectado.')
+        return dict(track=track, text=text(value.get('text', ''), 0, 2400),
+                    lyricExcerpt=self.db.clean_excerpt(value.get('lyricExcerpt', '')), audioExcerpt=audio)
+
+    def send(self, user_id, data):
+        identifier = self.identifier(data.get('id'))
+        target = self.identifier(data.get('user'))
+        kind = data.get('kind', 'text')
+        if kind not in ('text', 'ressoa', 'post'):
+            raise APIError(400, 'Tipo de mensagem inválido.')
+        with self.db.transaction() as db:
+            self.person(db, user_id, target)
+            previous = db.execute('''SELECT m.*,t.user_a,t.user_b FROM dm_messages m
+                JOIN dm_threads t ON t.id=m.thread_id WHERE m.id=?''', (identifier,)).fetchone()
+            if previous:
+                if previous['sender_id'] != user_id or target not in (previous['user_a'], previous['user_b']):
+                    raise APIError(409, 'Essa mensagem já foi utilizada. Tente novamente.')
+                return dict(message=self.message(db, user_id, previous), summary=self.summary(user_id, db))
+            message, payload, post_id = '', {}, None
+            if kind == 'text':
+                message = text(data.get('text'), 1, 2400)
+            elif kind == 'ressoa':
+                payload = self.ressoa_payload(data.get('post'))
+            else:
+                post_id = self.identifier(data.get('postId'))
+                post = self.db.accessible(db, user_id, post_id)
+                if post['visibility'] == 'private' and post['owner_id'] == user_id:
+                    payload = self.ressoa_payload(self.db.post(db, post))
+                    kind, post_id = 'ressoa', None
+                else:
+                    try:
+                        self.db.accessible(db, target, post_id)
+                    except APIError:
+                        raise APIError(403, 'Essa pessoa não tem permissão para ver este Ressoa.') from None
+            thread = self.thread(db, user_id, target)
+            timestamp = now_iso()
+            if not thread:
+                a, b = sorted((user_id, target))
+                db.execute('INSERT INTO dm_threads VALUES (?,?,?,?) ON CONFLICT(user_a,user_b) DO NOTHING',
+                           (str(uuid.uuid4()), a, b, timestamp))
+                thread = self.thread(db, user_id, target)
+            db.execute('INSERT INTO dm_messages VALUES (?,?,?,?,?,?,?,?,NULL)',
+                       (identifier, thread['id'], user_id, kind, message, json.dumps(payload), post_id, timestamp))
+            db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id IN (?,?)', (user_id, target))
+            row = db.execute('SELECT * FROM dm_messages WHERE id=?', (identifier,)).fetchone()
+            return dict(message=self.message(db, user_id, row), summary=self.summary(user_id, db))
+
+    def read(self, user_id, data):
+        ids = data.get('ids')
+        if not isinstance(ids, list) or len(ids) > 50:
+            raise APIError(400, 'Mensagens inválidas.')
+        identifiers = list(dict.fromkeys(self.identifier(value) for value in ids))
+        with self.db.transaction() as db:
+            target = self.person(db, user_id, data.get('user'))['id']
+            thread = self.thread(db, user_id, target)
+            if thread and identifiers:
+                marks = ','.join('?' for _ in identifiers)
+                changed = db.execute(f'''UPDATE dm_messages SET read_at=? WHERE thread_id=?
+                    AND sender_id=? AND read_at IS NULL AND id IN ({marks}) RETURNING id''',
+                    (now_iso(), thread['id'], target, *identifiers)).fetchall()
+                if changed:
+                    db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id=?', (user_id,))
+            return dict(summary=self.summary(user_id, db))

@@ -179,6 +179,8 @@ def initialize(dsn, sqlite_schema):
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS lyric_excerpt TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS feed_published_at TEXT NOT NULL DEFAULT ''")
         db.execute('ALTER TABLE posts ADD COLUMN IF NOT EXISTS audio_excerpt TEXT')
+        db.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS mentions TEXT NOT NULL DEFAULT '[]'")
+        db.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS messages_version INTEGER NOT NULL DEFAULT 0')
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_email_ci ON users(lower(email))')
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_exact ON users(username COLLATE "C")')
         db.execute('DROP INDEX IF EXISTS users_username_ci')
@@ -196,3 +198,4 @@ def initialize(dsn, sqlite_schema):
         db.execute('INSERT INTO ressoa_schema VALUES (8) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (9) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (10) ON CONFLICT DO NOTHING')
+        db.execute('INSERT INTO ressoa_schema VALUES (11) ON CONFLICT DO NOTHING')

@@ -8,6 +8,7 @@
 !services.py
 !spotify.py
 !mail.py
+!messaging.py
 !gunicorn.conf.py
 !web/
 !web/**

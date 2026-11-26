@@ -33,7 +33,7 @@ export function createPlayback({ tracks, musicDetails, toast }) {
     try { controller?.pause(); controller?.destroy(); } catch {}
     controller = null;
     document.querySelectorAll('[data-preview-player]').forEach(host => host.replaceChildren());
-    document.querySelectorAll('[data-play]').forEach(button => { state(button, false); button.removeAttribute('aria-busy'); });
+    document.querySelectorAll('[data-play],[data-dm-play]').forEach(button => { state(button, false); button.removeAttribute('aria-busy'); });
     document.querySelector('#spotify-controller-host')?.replaceChildren();
   }
   function nativeAudio(detail, button, inline = false, index, excerpt = null) {

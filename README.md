@@ -36,12 +36,18 @@ A interface usa tema escuro, capas de álbuns e elementos inspirados em discos. 
 | **Perfil** | Personalizar foto e bio; escolher e enquadrar a capa de fundo com zoom e posição ajustáveis; escolher até seis favoritas; fixar publicações e reunir seus Ressoas e reposts. |
 | **Conexões** | Buscar pessoas, seguir perfis e aprovar solicitações quando sua conta for privada. |
 | **Interações** | Curtir sem contagem pública, comentar, repostar e salvar publicações. O autor pode consultar curtidas e reposts. |
-| **Notificações** | Acompanhar novos seguidores, solicitações, curtidas, reposts e comentários no mesmo lugar. |
-| **Compartilhamento** | Visualizar e baixar a imagem do Ressoa ou copiar seu link. Depois do login, o link leva à publicação compartilhada. |
+| **Marcações** | Digitar @ no comentário, escolher uma pessoa e avisá-la quando ela tiver permissão para ver o Ressoa. |
+| **Notificações** | Acompanhar novos seguidores, solicitações, curtidas, reposts, comentários e marcações no mesmo lugar. |
+| **Mensagens** | Conversar com outra pessoa, enviar uma publicação ou criar um Ressoa exclusivo pelo botão +, com contador de mensagens não lidas. |
+| **Compartilhamento** | Visualizar e baixar a imagem do Ressoa, copiar seu link ou enviá-lo por mensagem. Depois do login, o link leva à publicação compartilhada. |
 
 O feed trabalha com grupos de até dez publicações, priorizando as recentes e ainda não vistas. Ressoas comuns permanecem no feed por 24 horas e continuam disponíveis no perfil e no diário.
 
 Contas privadas permitem controlar quem vê suas publicações. As permissões de acesso, a autoria das alterações e o limite do Ressoa da semana são conferidos no servidor.
+
+As conversas são entre duas contas. Ressoas criados dentro delas ficam nas mensagens; o feed e o diário usam seus próprios registros. O envio de uma publicação existente respeita o acesso do destinatário, e a publicação fica indisponível na conversa se essa permissão mudar. Ao enviar um registro do próprio diário privado, o autor compartilha uma cópia apenas com o destinatário escolhido.
+
+Os contadores e as conversas são atualizados por consultas periódicas enquanto o site está aberto. As mensagens ficam armazenadas no servidor e acessíveis às duas contas participantes; não há criptografia de ponta a ponta.
 
 ### Música, áudio e letra
 
@@ -91,6 +97,7 @@ ressoa/
 ├── web/                    # Páginas, estilos, módulos JavaScript e assets
 ├── webapp.py               # Aplicação WSGI e rotas HTTP
 ├── database.py             # Persistência e regras de negócio
+├── messaging.py            # Conversas, mensagens e permissões de envio
 ├── postgres_storage.py     # Adaptação e conexões com PostgreSQL
 ├── services.py             # Catálogos musicais, metadados e letras
 ├── spotify.py              # Autorização, busca e reprodução pelo Spotify

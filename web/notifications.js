@@ -8,7 +8,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   const status = document.getElementById('notification-status');
   const more = document.getElementById('notification-more');
   const retry = document.getElementById('notification-retry');
-  let items = [], cursor = null, loadedVersion = -1;
+  let items = [], cursor = null;
   let request = null, generation = 0, reading = false, polling = false;
   let failedAppend = false;
   let checkingFollows = false;
@@ -33,7 +33,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       const details = row.querySelector('.person-identity > span:last-child');
       const message = document.createElement('small');
       message.className = 'notification-message';
-      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa'})[item.kind];
+      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa',mention:'Marcou você em um Ressoa'})[item.kind];
       const time = document.createElement('time');
       time.dateTime = item.createdAt;
       time.textContent = new Date(item.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -156,7 +156,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
         const known = new Set(items.map(key));
         items.push(...data.items.filter(item => !known.has(key(item))));
       } else items = data.items;
-      cursor = data.nextCursor; loadedVersion = data.summary.version;
+      cursor = data.nextCursor;
       updateNotifications(data.summary, owner);
       render(); status.textContent = '';
       void readVisible();
@@ -180,8 +180,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       const { summary } = await api('/api/notifications?summary=1');
       if (owner !== getAccount().user.id) return;
       updateNotifications(summary, owner);
-      if (dialog.open && (loadedVersion !== getAccount().notifications.version || items.some(expired))) await load();
-      else if (dialog.open) void readVisible();
+      if (dialog.open) await load();
     } catch { /* Keep the last confirmed counter during a temporary connection failure. */ }
     finally { polling = false; }
   }

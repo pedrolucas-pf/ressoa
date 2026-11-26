@@ -14,9 +14,11 @@ import { ensureTrackDetails, durationLabel, trackSummary } from './track-context
 import { createPeopleSearch, personHref } from './people-search.js';
 import { createNotifications } from './notifications.js';
 import { createComments } from './comments.js';
+import { createMessages } from './messages.js';
+import { createMentionPicker, mentionMarkup } from './mentions.js';
 import { createAudioExcerpt } from './audio-excerpt.js';
 import { bindUsernameValidation, normalizeUsername, usernameError } from './username.js';
-import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, actionPending, hydratePublicProfile, hydratePost } from './session.js';
+import { api, readAccount, writeAccount, getAccount, refreshAccount, socialAction, saveSeen, mutate, busy, actionPending, hydratePublicProfile, hydratePost, wireTrack } from './session.js';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -40,6 +42,8 @@ $('#edit-publish-only').addEventListener('click',()=>finishEditPublication(false
 $('#edit-publish-again').addEventListener('click',()=>finishEditPublication(true));
 $('#edit-publish-dialog').addEventListener('close',()=>{const resolve=resolveEditPublication;resolveEditPublication=null;resolve?.(null);});
 let editingId = null, readerId = null, shareFile = null, sharePost = null, confirmAction = null;
+let composerRecipient=null,composerMessageId=null;
+const directDrafts=new Map();
 let social = readAccount('ressoa.social', {}), feedGeneratedAt = Date.now();
 let publicPosts = readAccount('ressoa.public', []);
 let visitedId=null,visitedProfile=null,profileError='',profileRequest=null,profileGeneration=0,loadingMore=false;
@@ -274,6 +278,11 @@ function scheduleTextLayout() {
     document.querySelectorAll('#profile-content .diary-card,#diary-entries .diary-card').forEach(card=>{const post=byId.get(card.dataset.id);if(post){const text=card.querySelector('.reflection'),placeholder=!post.text&&Boolean(card.closest('#profile-content'));text.classList.toggle('no-comment',placeholder);fitText(text,placeholder?'...':post.text);}});
     const featured=visitedId?visitedProfile?.weekly:myWeeklyPost(),weeklyText=$('#profile-content .weekly-reflection');
     if(featured&&weeklyText)fitText(weeklyText,previewText(featured));
+    document.querySelectorAll('.story .reflection').forEach(node=>{
+      const post=byId.get(node.closest('[data-id]')?.dataset.id);
+      if(post?.mentions?.length)node.innerHTML=mentionMarkup(node.textContent,post.mentions);
+    });
+    if(featured&&weeklyText)weeklyText.innerHTML=mentionMarkup(weeklyText.textContent,featured.mentions);
   });
 }
 const textObserver=new ResizeObserver(scheduleTextLayout);
@@ -571,6 +580,9 @@ function openPost(id,post=allPosts().find(value=>value.id===id)) {
  if(!post)return;stopPreview();readerId=id;
  const track=tracks[post.track],own=isMine(post),pub=post.visibility!=='private';
  $('#reader-content').innerHTML=`<div class="reader-cover">${playableArt(post.track,140,post.lyricExcerpt,post)}</div><h2 id="reader-title">${escape(track.title)}</h2><p class="artist">${escape(track.artist)}</p>${spotifyBrand(post.track)}<div class="reader-author">${authorMarkup(post)}</div><p class="reader-text" ${post.text?'':'hidden'}>${escape(post.text)}</p><div class="reader-social">${pub?socialButtons(post):''}${saveButton(post)}</div><div class="post-commands">${own&&post.kind!=='weekly'?`<button class="text-button" data-edit="${escape(id)}">Editar</button><button class="text-button" data-delete="${escape(id)}">Apagar</button>`:''}${own&&post.kind==='weekly'?'<button class="text-button" data-delete-weekly>Apagar destaque</button>':''}${own&&pub?`<button class="text-button" data-interactions="${escape(id)}">Curtidas e reposts</button>`:''}${own&&pub&&post.kind!=='weekly'?`<button class="text-button" data-feature="${escape(id)}" ${weeklyLocked()?'disabled':''}>Usar música na semana</button><button class="text-button" data-reader-pin="${escape(id)}">${profileInfo.pinned.includes(id)?'Desafixar':'Fixar no perfil'}</button>`:''}</div>`;
+ $('#reader-content .reader-text').innerHTML=mentionMarkup(post.text,post.mentions);
+ const direct=document.createElement('button');direct.type='button';direct.className='text-button';direct.dataset.messagePost=id;direct.textContent='Enviar por mensagem';
+ $('#reader-content .post-commands').prepend(direct);
  if(!$('#reader').open)$('#reader').showModal();
 }
 $('#reader').addEventListener('close',()=>{
@@ -596,6 +608,7 @@ function setWeekly(id) {
 $('#define-weekly').addEventListener('click', () => {
   if (weeklyLocked()) return;
   weeklyPicker.reset(); $('#weekly-form').reset();weeklyAudio.set(null);renderExcerptChoice('weekly');
+  weeklyMentions.set([]);
   $('#weekly-dialog').showModal();
 });
 $('#weekly-form').addEventListener('submit', async event => {
@@ -604,7 +617,7 @@ $('#weekly-form').addEventListener('submit', async event => {
   if (weeklyLocked()) { toast(`Sua próxima escolha será em ${nextWeekLabel()}.`); return; }
   if (!weeklyPicker.requireSelection()) return;
   const text = event.currentTarget.elements.reflection.value.trim();
-  const entry = makeEntry(weeklyPicker.value, text, 'public',event.currentTarget.elements.lyricExcerpt.value,weeklyAudio.value);
+  const entry = makeEntry(weeklyPicker.value, text, 'public',event.currentTarget.elements.lyricExcerpt.value,weeklyAudio.value,weeklyMentions.value);
   savingWeekly=true;
   const stored=await saveNewEntry(entry,true);savingWeekly=false;
   if(!stored)return;
@@ -612,6 +625,8 @@ $('#weekly-form').addEventListener('submit', async event => {
 });
 
 const form = $('#entry-form');
+const entryMentions=createMentionPicker(form.elements.reflection);
+const weeklyMentions=createMentionPicker($('#weekly-form').elements.reflection);
 const pickerOptions = { onPreview: mountPreview, onStop: stopPreview, onError: toast };
 const composerPicker = createTrackPicker($('#composer-track-picker'), { ...pickerOptions, onChange:index=>trackChanged('entry',index) });
 const weeklyPicker = createTrackPicker($('#weekly-track-picker'), {...pickerOptions,onChange:index=>trackChanged('weekly',index)});
@@ -642,24 +657,31 @@ document.addEventListener('click',event=>{
  if(picker.requireSelection())lyricPicker.open({scope,track:picker.value,excerpt:target.elements.lyricExcerpt.value,audio:(scope==='weekly'?weeklyAudio:entryAudio).value});
 });
 
-function openComposer(id = null) {
+function openComposer(id = null, recipient = null) {
  stopPreview(); const existing=id?entries.find(post=>post.id===id):null;if(id&&!existing)return;
- editingId=existing?.id||null;const draft=existing?{text:existing.text,track:existing.track,visibility:existing.visibility,lyricExcerpt:existing.lyricExcerpt,audioExcerpt:existing.audioExcerpt}:read('ressoa.draft',{});
+ editingId=existing?.id||null;composerRecipient=recipient;composerMessageId=recipient?newId():null;
+ const draft=recipient?directDrafts.get(recipient.id)||{}:existing?{text:existing.text,track:existing.track,visibility:existing.visibility,lyricExcerpt:existing.lyricExcerpt,audioExcerpt:existing.audioExcerpt,mentions:existing.mentions}:read('ressoa.draft',{});
  form.reset();composerPicker.reset();form.elements.reflection.setCustomValidity('');
  if(typeof draft?.text==='string')form.elements.reflection.value=draft.text;
  if(Number.isInteger(draft?.track)&&tracks[draft.track])composerPicker.setSelection(draft.track,false);
  if(['public','private'].includes(draft?.visibility))form.elements.visibility.value=draft.visibility;
+ entryMentions.set(draft?.mentions||[]);entryMentions.enable(!recipient);
+ $('#entry-visibility').hidden=Boolean(recipient);form.elements.visibility.disabled=Boolean(recipient);
+ $('#visibility-note').hidden=Boolean(recipient);$('#entry-direct-note').hidden=!recipient;
+ $('#entry-direct-note').textContent=recipient?`Só você e @${recipient.handle} verão este Ressoa, dentro da conversa.`:'';
  form.elements.lyricExcerpt.value=draft?.lyricExcerpt||'';renderExcerptChoice('entry');
  entryAudio.set(composerPicker.value,draft?.audioExcerpt||null);
- $('#composer-title').textContent=editingId?'Editar ressoa':'Escrever uma ressoa';$('#entry-form [type="submit"]').textContent=editingId?'Salvar alterações':'Salvar ressoa';$('#composer').showModal();
+ $('#composer-title').textContent=recipient?`Ressoa para @${recipient.handle}`:editingId?'Editar ressoa':'Escrever uma ressoa';$('#entry-form [type="submit"]').textContent=recipient?'Enviar Ressoa':editingId?'Salvar alterações':'Salvar ressoa';$('#composer').showModal();
 }
 
 let draftTimer;
 function persistDraft() {
   if (editingId) return;
+  const draft={text:form.elements.reflection.value,track:composerPicker.value,visibility:form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value,mentions:entryMentions.value};
+  if(composerRecipient){directDrafts.set(composerRecipient.id,draft);return;}
   clearTimeout(draftTimer);
   draftTimer = setTimeout(() => {
-    write('ressoa.draft', { text: form.elements.reflection.value, track: composerPicker.value, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value });
+    write('ressoa.draft', draft);
   }, 800);
 }
 $('#write-entry').addEventListener('click', () => openComposer());
@@ -673,24 +695,32 @@ form.addEventListener('submit', async event => {
   const text = form.elements.reflection.value.trim();
   if (!composerPicker.requireSelection()) return;
   savingEntry=true;
-  const submit=$('#entry-form [type="submit"]'),submitLabel=submit.textContent;
+  const submit=$('#entry-form [type="submit"]');
   submit.disabled=true;submit.textContent='Salvando…';
   $('#entry-form [type="submit"]').setAttribute('aria-busy','true');
   try {
+  if(composerRecipient){
+    const target=composerRecipient,id=composerMessageId;
+    try{await messages.sendRessoa({track:wireTrack(composerPicker.value),text,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value},target.id,id);}
+    catch(error){toast(error.message);return;}
+    directDrafts.delete(target.id);
+    if(composerMessageId===id){composerRecipient=null;composerMessageId=null;form.reset();$('#composer').close();}
+    toast(`Ressoa enviado para @${target.handle}.`);return;
+  }
   let entry;
   if (editingId) {
     const existing = entries.find(post => post.id === editingId);
     if (!existing) { toast('Esta ressoa não está mais disponível.'); return; }
-    entry = { ...existing, track: composerPicker.value, text, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value,updatedAt: new Date().toISOString() };
+    entry = { ...existing, track: composerPicker.value, text, visibility: form.elements.visibility.value,lyricExcerpt:form.elements.lyricExcerpt.value,audioExcerpt:entryAudio.value,mentions:entryMentions.value,updatedAt: new Date().toISOString() };
     const updated = entries.map(post => post.id === editingId ? entry : post);
-    const changed=existing.track!==entry.track||existing.text!==entry.text||existing.visibility!==entry.visibility||(existing.lyricExcerpt||'')!==entry.lyricExcerpt||JSON.stringify(existing.audioExcerpt||null)!==JSON.stringify(entry.audioExcerpt);
+    const changed=existing.track!==entry.track||existing.text!==entry.text||existing.visibility!==entry.visibility||(existing.lyricExcerpt||'')!==entry.lyricExcerpt||JSON.stringify(existing.audioExcerpt||null)!==JSON.stringify(entry.audioExcerpt)||JSON.stringify(existing.mentions||[])!==JSON.stringify(entry.mentions);
     let publishAgain=false;
     if(changed&&existing.visibility==='public'&&entry.visibility==='public'){
       publishAgain=await askEditPublication();if(publishAgain===null)return;
     }
     if (!await write('ressoa.entries', updated,true,{republish:publishAgain?entry.id:undefined})) return;
   } else {
-    entry = makeEntry(composerPicker.value, text, form.elements.visibility.value,form.elements.lyricExcerpt.value,entryAudio.value);
+    entry = makeEntry(composerPicker.value, text, form.elements.visibility.value,form.elements.lyricExcerpt.value,entryAudio.value,entryMentions.value);
     if (!await saveNewEntry(entry)) return;
   }
   const wasEditing = Boolean(editingId); editingId = null;
@@ -699,11 +729,11 @@ form.addEventListener('submit', async event => {
   renderStories(); renderDiary(); renderProfile();
   if (wasEditing) openPost(entry.id);
   toast(wasEditing ? 'Alterações salvas.' : 'Ressoa salva.');
-  } finally { savingEntry=false;submit.disabled=false;submit.textContent=submitLabel;submit.removeAttribute('aria-busy'); }
+  } finally { savingEntry=false;submit.disabled=false;submit.textContent=composerRecipient?'Enviar Ressoa':editingId?'Salvar alterações':'Salvar ressoa';submit.removeAttribute('aria-busy'); }
 });
 
 
-function makeEntry(track,text,visibility,lyricExcerpt='',audioExcerpt=null) {return{id:newId(),track,text,visibility,lyricExcerpt,audioExcerpt,ownerId:'me',author:'Você',initials:'P',createdAt:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})};}
+function makeEntry(track,text,visibility,lyricExcerpt='',audioExcerpt=null,mentions=[]) {return{id:newId(),track,text,visibility,lyricExcerpt,audioExcerpt,mentions,ownerId:'me',author:'Você',initials:'P',createdAt:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})};}
 async function saveNewEntry(entry,feature=false) {
  if(feature){
   if(weeklyLocked()){toast(`Sua próxima escolha será em ${nextWeekLabel()}.`);return false;}
@@ -836,8 +866,9 @@ function renderProfile() {
  const ordered=combined.sort((a,b)=>Number(info.pinned.includes(b.id))-Number(info.pinned.includes(a.id))||Date.parse(b.createdAt)-Date.parse(a.createdAt)||b.id.localeCompare(a.id));
  const more=(kind,next)=>!own&&next!==null?`<button class="button load-profile-posts" data-more-profile="${kind}" ${loadingMore?'disabled':''}>${loadingMore?'Carregando…':kind==='reposts'?'Carregar mais reposts':'Carregar mais'}</button>`:'';
  const identity=`<div class="profile-identity">${profileAvatar(info.photo,info.displayName)}<div><h1>${escape(info.displayName)}</h1><p class="profile-handle">@${escape(info.handle)}</p>${info.bio?`<p class="profile-bio">${escape(info.bio)}</p>`:''}${own?'':`<button class="button profile-follow" data-follow="${escape(visitedId)}" data-private="${Boolean(info.isPrivate)}" ${pendingAttributes('follow',visitedId)} aria-pressed="${hasFollow(visitedId)}">${followLabel(visitedId,info.isPrivate)}</button>`}</div></div>`;
- if(!own&&visitedProfile.canView===false){$('#profile-content').innerHTML=identity+'<section class="locked-profile"><h2>Perfil privado</h2><p>Somente seguidores aprovados.</p></section>';applyProfileBackground();return;}
- $('#profile-content').innerHTML=`${identity}
+ const contact=own?'':`<button type="button" class="button profile-message" data-message-user="${escape(visitedId)}">Enviar mensagem</button>`;
+ if(!own&&visitedProfile.canView===false){$('#profile-content').innerHTML=identity+contact+'<section class="locked-profile"><h2>Perfil privado</h2><p>Somente seguidores aprovados.</p></section>';applyProfileBackground();return;}
+ $('#profile-content').innerHTML=`${identity}${contact}
  ${featured?weeklyFeatureMarkup(featured):''}
  ${info.favorites.length?`<section class="profile-favorites"><h2>Favoritas</h2><div class="favorite-grid">${info.favorites.map(index=>`<div>${trackArt(index,180)}<p><button class="track-name" data-music="${index}">${escape(tracks[index].title)}</button></p><span class="artist">${escape(tracks[index].artist)}</span>${spotifyBrand(index)}</div>`).join('')}</div></section>`:''}
  <section class="profile-posts" aria-label="Ressoas"><div class="diary-grid">${ordered.length?ordered.map(post=>diaryMarkup(post,{reposted:repostIds.has(post.id),pinned:info.pinned.includes(post.id),inProfile:true})).join(''):'<p class="empty">Nenhuma ressoa.</p>'}</div><div class="profile-pagination">${more('entries',visitedProfile?.nextEntriesOffset)}${more('reposts',visitedProfile?.nextRepostsOffset)}</div></section>`;
@@ -1028,6 +1059,11 @@ function peopleIdentity(person) {
  return `<a class="person-link person-identity" href="${escape(personHref(person.id))}" data-person="${escape(person.id)}">${profileAvatar(person.photo,person.displayName)}<span>${escape(person.displayName)}<small>@${escape(person.handle)}</small></span></a>`;
 }
 const comments=createComments({identity:peopleIdentity,toast,stopPreview});
+const messages=createMessages({toast,stopPreview,onCompose:person=>openComposer(null,person),onPlay:toggleCoverPlayer,onOpenPost:id=>{location.hash='#ressoa/'+encodeURIComponent(id);}});
+document.addEventListener('click',event=>{
+ const person=event.target.closest('[data-message-user]');if(person)void messages.open(person.dataset.messageUser);
+ const post=event.target.closest('[data-message-post]');if(post){$('#reader').close();messages.share(post.dataset.messagePost);}
+});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-comments]');if(button)comments.open(button.dataset.comments);});
 const notifications=createNotifications({
  identity:peopleIdentity,toast,
@@ -1076,6 +1112,7 @@ async function openShare(id) {
 const shareUrl = () => sharePost?new URL(`/#ressoa/${encodeURIComponent(sharePost.id)}`,location.origin).href:'';
 $('#download-share').addEventListener('click',()=>{if(shareFile)downloadFile(shareFile,'ressoa-card.png');});
 $('#copy-share-link').addEventListener('click',async()=>{try{if(sharePost){await navigator.clipboard.writeText(shareUrl());toast('Link copiado.');}}catch{toast('O navegador não permitiu copiar o link.');}});
+$('#send-share-message').addEventListener('click',()=>{if(sharePost){const id=sharePost.id;$('#share-dialog').close();messages.share(id);}});
 $('#share-dialog').addEventListener('close',()=>{shareGeneration++;shareFile=null;sharePost=null;clearSharePreview();});
 $('#profile-editor').addEventListener('close',()=>{backgroundPicker.close();backgroundEditor.stop();favoritePickers.forEach(picker=>picker.close());stopPreview();});
 document.addEventListener('click',async event=>{

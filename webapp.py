@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote
 from database import APIError, Database
 from mail import PasswordRecovery
+from messaging import Messaging
 from services import ServiceError, search_tracks, get_track, lyrics, login_artwork
 from spotify import Spotify
 
@@ -49,6 +50,7 @@ class Application:
         self.db=Database(source)
         self.password_recovery=PasswordRecovery(self.db)
         self.spotify=Spotify(self.db)
+        self.messages=Messaging(self.db)
 
     def __call__(self, env, start_response):
         started = perf_counter()
@@ -231,6 +233,20 @@ class Application:
         if path == '/api/feed' and method == 'POST':
             self.db.limit('feed-read:'+user_id,60,60)
             return 200, self.db.bootstrap(user_id,feed_options=data), []
+        if path.startswith('/api/messages'):
+            if method == 'GET':
+                self.db.limit('messages-read:'+user_id,120,60)
+                if path == '/api/messages/summary':
+                    return 200,dict(summary=self.messages.summary(user_id)),[]
+                if path == '/api/messages':
+                    return 200,(self.messages.conversation(user_id,value('user'),value('cursor')) if value('user') else self.messages.inbox(user_id,value('cursor'))),[]
+            if path == '/api/messages' and method == 'POST':
+                self.db.limit('messages-send:'+user_id,40,60)
+                return 200,self.messages.send(user_id,data),[]
+            if path == '/api/messages/read' and method == 'POST':
+                self.db.limit('messages-read-receipt:'+user_id,120,60)
+                return 200,self.messages.read(user_id,data),[]
+            raise APIError(404,'Conversa não encontrada.')
         if path == '/api/post' and method == 'GET':
             self.db.limit('post-read:'+user_id,90,60)
             return 200, {'post':self.db.shared_post(user_id,value('id'))}, []

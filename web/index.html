@@ -85,6 +85,7 @@
     </div>
     <div class="header-actions">
       <button type="button" class="icon-button spotify-shortcut" id="spotify-shortcut" data-spotify-shortcut aria-label="Conectar Spotify" title="Conectar Spotify" hidden><img src="assets/spotify-icon-white.svg" alt="" width="22" height="22"></button>
+      <button type="button" class="icon-button notifications-button" id="messages-button" aria-label="Mensagens" title="Mensagens" aria-haspopup="dialog" aria-controls="messages-dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 9h10M7 13h6"/></svg><span id="message-count" class="notification-count" aria-hidden="true" hidden></span></button>
       <button class="icon-button notifications-button" id="notifications-button" aria-label="Notificações" aria-haspopup="dialog" aria-controls="notifications-dialog"><span aria-hidden="true"></span><span id="notification-count" class="notification-count" aria-hidden="true" hidden></span></button>
       <a class="icon-button profile-shortcut" href="#perfil" data-page="perfil" aria-label="Meu perfil" title="Meu perfil"><span class="profile-avatar" aria-hidden="true"></span></a>
     </div>
@@ -139,6 +140,12 @@
       <div id="profile-content"></div>
     </section>
   </main>
+  <dialog id="messages-dialog" aria-labelledby="messages-title">
+    <div class="dialog-heading"><button type="button" class="icon-button" id="messages-back" aria-label="Voltar às conversas" hidden>←</button><h2 id="messages-title">Mensagens</h2><button type="button" class="icon-button" data-close="messages-dialog" aria-label="Fechar mensagens">×</button></div>
+    <section id="messages-inbox"><label class="messages-search">Nova conversa<input id="messages-search" type="search" placeholder="Busque por nome ou @usuário" autocomplete="off" maxlength="80"></label><div id="messages-people" hidden></div><div id="messages-conversations"></div><button type="button" class="text-button" id="messages-more" hidden>Mais conversas</button></section>
+    <section id="messages-chat" hidden><button type="button" class="text-button" id="messages-older" hidden>Mensagens anteriores</button><div id="messages-thread" role="log" aria-label="Mensagens da conversa" aria-live="polite" aria-relevant="additions text"></div><div id="messages-pending" hidden><span id="messages-pending-label"></span><button type="button" class="button" id="messages-send-post">Enviar Ressoa</button><button type="button" class="icon-button" id="messages-cancel-post" aria-label="Cancelar envio do Ressoa">×</button></div><form id="message-form"><button type="button" class="icon-button" id="message-compose" aria-label="Criar um Ressoa nesta conversa">＋</button><label class="sr-only" for="message-text">Mensagem</label><textarea id="message-text" name="text" rows="1" maxlength="2400" placeholder="Sua mensagem…" required></textarea><button type="submit" class="icon-button" aria-label="Enviar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="m11 13 11-11"/></svg></button></form></section>
+    <p class="form-note" id="messages-status" role="status"></p>
+  </dialog>
   <dialog id="reader" aria-labelledby="reader-title">
     <button class="close icon-button" data-close="reader" aria-label="Fechar leitura">×</button>
     <div id="reader-content"></div>
@@ -153,7 +160,8 @@
       <div id="entry-audio-choice"></div>
       <input type="hidden" name="lyricExcerpt" value=""><div id="entry-excerpt-choice" class="excerpt-choice"></div>
       <label>Comentário (opcional)<textarea name="reflection" maxlength="2400" rows="6" placeholder="Se quiser, escreva aqui"></textarea></label>
-      <label>Visibilidade<select name="visibility"><option value="public">Pública</option><option value="private">Só no meu diário</option></select></label>
+      <label id="entry-visibility">Visibilidade<select name="visibility"><option value="public">Pública</option><option value="private">Só no meu diário</option></select></label>
+      <p id="entry-direct-note" class="form-note" hidden></p>
       <p class="form-note" id="visibility-note">Salvo na sua conta. Respeitamos a visibilidade que você escolher.</p>
       <button class="button primary" type="submit">Salvar ressoa</button>
     </form>
@@ -227,7 +235,7 @@
     <button type="button" class="text-button" id="notification-more" hidden>Ver mais</button>
     <button type="button" class="text-button" id="notification-retry" hidden>Tentar novamente</button>
   </dialog>
-  <dialog id="share-dialog" aria-labelledby="share-title"><div class="dialog-heading"><h2 id="share-title">Compartilhar ressoa</h2><button class="icon-button" data-close="share-dialog" aria-label="Fechar compartilhamento">×</button></div><div id="share-preview"></div><p id="share-status" class="form-note" role="status"></p><div class="dialog-actions"><button type="button" class="button primary" id="download-share" disabled>Baixar ressoa</button><button type="button" class="button" id="copy-share-link">Copiar link</button></div></dialog>
+  <dialog id="share-dialog" aria-labelledby="share-title"><div class="dialog-heading"><h2 id="share-title">Compartilhar ressoa</h2><button class="icon-button" data-close="share-dialog" aria-label="Fechar compartilhamento">×</button></div><div id="share-preview"></div><p id="share-status" class="form-note" role="status"></p><div class="dialog-actions"><button type="button" class="button primary" id="download-share" disabled>Baixar ressoa</button><button type="button" class="button" id="copy-share-link">Copiar link</button><button type="button" class="button" id="send-share-message">Enviar por mensagem</button></div></dialog>
   <div id="spotify-controller-host" aria-hidden="true"></div>
   <div id="toast" role="status" hidden></div>
   </div>
