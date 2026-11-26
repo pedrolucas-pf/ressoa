@@ -5,6 +5,9 @@ import { albumArt, fitLyricArt } from './post-art.js';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const stamp=value=>new Date(value).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+const clock=value=>new Date(value).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+const inboxTime=value=>new Date(value).toDateString()===new Date().toDateString()?clock(value):new Date(value).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+const emptyIcon='<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="19"/><circle cx="24" cy="24" r="6"/><circle cx="24" cy="24" r="2"/><path d="M10 24a14 14 0 0 1 14-14m0 28a14 14 0 0 0 14-14"/></svg>';
 
 export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPost }) {
   const $=selector=>document.querySelector(selector);
@@ -35,31 +38,40 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     $('#messages-send-post').disabled=sending;
   }
   function avatar(value){return `<span class="profile-avatar">${value.photo?`<img src="${escape(value.photo)}" alt="">`:escape(value.displayName.slice(0,2).toUpperCase())}</span>`;}
+  function renderHeader(value=null){
+    dialog.dataset.view=value?'chat':'inbox';
+    $('#messages-title').textContent=value?value.displayName||'Conversa':pendingPost?'Enviar Ressoa':'Mensagens';
+    $('#messages-subtitle').hidden=!value;
+    $('#messages-subtitle').textContent=value?.handle?'@'+value.handle:value?'Carregando…':'';
+    const photo=$('#messages-avatar');photo.hidden=!value?.displayName;photo.innerHTML=value?.displayName?avatar(value):'';
+  }
+  function resizeInput(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
   function renderInbox(){
-    list.innerHTML=conversations.length?conversations.map(item=>`<button type="button" class="message-conversation${item.unreadCount?' unread':''}" data-conversation="${escape(item.person.id)}">${avatar(item.person)}<span><strong>@${escape(item.person.handle)}</strong><small>${escape(item.sentByMe?'Você: ':'')}${escape(item.preview)}</small></span><span class="message-conversation-meta"><time>${escape(stamp(item.updatedAt))}</time>${item.unreadCount?`<span class="message-unread">${item.unreadCount>99?'99+':item.unreadCount}</span>`:''}</span></button>`).join(''):'<p class="empty">Uma conversa pode começar com uma música.<br>Busque uma pessoa para enviar sua primeira mensagem.</p>';
+    $('#messages-list-label').hidden=!conversations.length;
+    list.innerHTML=conversations.length?conversations.map(item=>`<button type="button" class="message-conversation${item.unreadCount?' unread':''}" data-conversation="${escape(item.person.id)}">${avatar(item.person)}<span class="message-conversation-copy"><span class="message-conversation-name"><strong>${escape(item.person.displayName)}</strong><span>@${escape(item.person.handle)}</span></span><small>${escape(item.sentByMe?'Você: ':'')}${escape(item.preview)}</small></span><span class="message-conversation-meta"><time datetime="${escape(item.updatedAt)}" title="${escape(stamp(item.updatedAt))}">${escape(inboxTime(item.updatedAt))}</time>${item.unreadCount?`<span class="message-unread">${item.unreadCount>99?'99+':item.unreadCount}</span>`:''}</span></button>`).join(''):`<div class="empty message-empty">${emptyIcon}<h3>Nenhuma conversa ainda</h3><p>Busque alguém para enviar uma mensagem ou um Ressoa.</p></div>`;
     more.hidden=!inboxCursor;
   }
   function ressoaMarkup(message){
     const post=message.post;if(message.unavailable||!post)return '<p class="form-note">Este Ressoa não está mais disponível para você.</p>';
     const track=post.track,index=registerTrack(track);message.trackIndex=index;
     const attribution=track.provider==='spotify'?`<a class="spotify-attribution" href="${escape(track.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvir no Spotify"><img src="assets/spotify-white.svg" alt="Spotify" width="60" height="18"></a>`:'';
-    return `<div class="message-ressoa"><div class="message-ressoa-cover"><button type="button" class="cover-open" data-music="${index}" aria-label="Sobre ${escape(track.title)}">${albumArt({artwork:track.artwork||'assets/cover-unavailable.svg',album:track.album||track.title,excerpt:post.lyricExcerpt,size:220})}</button><button type="button" class="cover-play" data-dm-play="${escape(message.id)}" aria-label="Ouvir trecho" aria-pressed="false"><span aria-hidden="true">▶</span></button></div><div><p class="message-ressoa-label">${message.kind==='post'?'Ressoa compartilhado':'Só nesta conversa'}</p><h3><button type="button" class="track-name" data-music="${index}">${escape(track.title)}</button></h3><p class="artist">${escape(track.artist)}</p>${attribution}${post.text?`<p class="message-ressoa-text">${escape(post.text)}</p>`:''}${message.kind==='post'?`<button type="button" class="text-button" data-dm-open-post="${escape(post.id)}">Abrir Ressoa</button>`:''}</div></div>`;
+    return `<div class="message-ressoa"><div class="message-ressoa-cover"><button type="button" class="cover-open" data-music="${index}" aria-label="Sobre ${escape(track.title)}">${albumArt({artwork:track.artwork||'assets/cover-unavailable.svg',album:track.album||track.title,excerpt:post.lyricExcerpt,size:220})}</button><button type="button" class="cover-play" data-dm-play="${escape(message.id)}" aria-label="Ouvir trecho" aria-pressed="false"><span aria-hidden="true">▶</span></button></div><div class="message-ressoa-details"><p class="message-ressoa-label">${message.kind==='post'?'Ressoa compartilhado':'Só nesta conversa'}</p><h3><button type="button" class="track-name" data-music="${index}">${escape(track.title)}</button></h3><p class="artist">${escape(track.artist)}</p>${attribution}</div>${post.text?`<p class="message-ressoa-text">${escape(post.text)}</p>`:''}${message.kind==='post'?`<button type="button" class="text-button message-open" data-dm-open-post="${escape(post.id)}">Abrir Ressoa <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>`:''}</div>`;
   }
   function renderMessages(forceBottom=false,prepend=false){
     const atBottom=thread.scrollHeight-thread.clientHeight-thread.scrollTop<80,oldHeight=thread.scrollHeight,oldTop=thread.scrollTop;
     observer.disconnect();visible.clear();
     const nodes=new Map([...thread.children].map(node=>[node.dataset.message,node]));
-    if(!items.length){thread.innerHTML='<p class="empty">Só vocês dois por aqui.<br>Envie uma mensagem ou crie um Ressoa no +.</p>';return;}
+    if(!items.length){thread.innerHTML=`<div class="empty message-empty">${emptyIcon}<h3>Ainda não há mensagens</h3><p>Escreva abaixo ou use o + para enviar um Ressoa.</p></div>`;return;}
     thread.querySelector('.empty')?.remove();
     let position=0;
     for(const message of items){
       let node=nodes.get(message.id);const signature=JSON.stringify([message.kind,message.text,message.post,message.unavailable]);
       if(!node){node=document.createElement('article');node.dataset.message=message.id;}
-      node.className='message-bubble'+(message.senderId===self()?' sent':' received');
+      node.className='message-bubble'+(message.senderId===self()?' sent':' received')+(message.kind!=='text'?' has-ressoa':'');
       if(node.dataset.signature!==signature){
         if(node.querySelector('.cover-play.playing'))stopPreview();
         node.dataset.signature=signature;
-        node.innerHTML=(message.kind==='text'?`<p class="message-text">${escape(message.text)}</p>`:ressoaMarkup(message))+`<time datetime="${escape(message.createdAt)}">${escape(stamp(message.createdAt))}</time>`;
+        node.innerHTML=(message.kind==='text'?`<p class="message-text">${escape(message.text)}</p>`:ressoaMarkup(message))+`<time datetime="${escape(message.createdAt)}" title="${escape(stamp(message.createdAt))}" aria-label="${escape(stamp(message.createdAt))}">${escape(clock(message.createdAt))}</time>`;
       }
       if(thread.children[position]!==node)thread.insertBefore(node,thread.children[position]||null);
       position++;observer.observe(node);nodes.delete(message.id);
@@ -88,6 +100,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
       const data=await api('/api/messages?'+new URLSearchParams({user:target,...(append&&cursor?{cursor}:{})}),{signal:request.signal});
       if(token!==generation||account!==self()||person?.id!==target||!dialog.open)return;
       person=data.person;
+      renderHeader(person);
       const known=new Map((initial?[]:items).map(item=>[item.id,item]));data.items.forEach(item=>known.set(item.id,item));
       items=[...known.values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
       if(append||initial||items.length<=50)cursor=data.nextCursor;
@@ -98,7 +111,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   }
   function showInbox(){
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();person=null;items=[];cursor=null;observer.disconnect();visible.clear();
-    inbox.hidden=false;chat.hidden=true;back.hidden=true;loadedVersion=-1;$('#messages-title').textContent=pendingPost?'Enviar Ressoa':'Mensagens';
+    inbox.hidden=false;chat.hidden=true;back.hidden=true;loadedVersion=-1;renderHeader();
     search.value='';results.hidden=true;searchRequest?.abort();void loadInbox();
   }
   async function start(target){
@@ -106,11 +119,11 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();searchRequest?.abort();
     person=conversations.find(item=>item.person.id===target)?.person||{id:target,handle:'',displayName:'',photo:''};
     items=[];cursor=null;loadedVersion=-1;observer.disconnect();visible.clear();thread.replaceChildren();
-    inbox.hidden=true;chat.hidden=false;back.hidden=false;older.hidden=true;$('#messages-title').textContent=person.handle?'@'+person.handle:'Conversa';
+    inbox.hidden=true;chat.hidden=false;back.hidden=false;older.hidden=true;renderHeader(person);
     input.value=drafts.get(target)||'';submission=null;
-    if(!dialog.open)dialog.showModal();updatePending();
+    if(!dialog.open)dialog.showModal();resizeInput();updatePending();
     await loadConversation(false,true);
-    if(person?.id===target){$('#messages-title').textContent='@'+person.handle;$('#message-compose').setAttribute('aria-label','Criar Ressoa para @'+person.handle);}
+    if(person?.id===target){renderHeader(person);$('#message-compose').setAttribute('aria-label','Criar Ressoa para @'+person.handle);}
   }
   async function readVisible(){
     if(reading||!dialog.open||!person||document.hidden)return;
@@ -141,9 +154,9 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     if(submission?.text!==message||submission?.user!==target)submission={id:newId(),kind:'text',text:message,user:target};
     try{await sendPayload(submission,target);drafts.delete(target);if(person?.id===target)input.value='';submission=null;status.textContent='';}
     catch(error){status.textContent=error.message;}
-    finally{sending=false;send.disabled=false;updatePending();}
+    finally{sending=false;send.disabled=false;resizeInput();updatePending();}
   });
-  input.addEventListener('input',()=>{if(person)drafts.set(person.id,input.value);});
+  input.addEventListener('input',()=>{if(person)drafts.set(person.id,input.value);resizeInput();});
   input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!matchMedia('(pointer:coarse)').matches){event.preventDefault();form.requestSubmit();}});
   $('#message-compose').addEventListener('click',()=>{if(person)onCompose({...person});});
   $('#messages-send-post').addEventListener('click',async()=>{
