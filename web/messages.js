@@ -8,6 +8,8 @@ const stamp=value=>new Date(value).toLocaleString('pt-BR',{day:'2-digit',month:'
 const clock=value=>new Date(value).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 const inboxTime=value=>new Date(value).toDateString()===new Date().toDateString()?clock(value):new Date(value).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
 const emptyIcon='<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="19"/><circle cx="24" cy="24" r="6"/><circle cx="24" cy="24" r="2"/><path d="M10 24a14 14 0 0 1 14-14m0 28a14 14 0 0 0 14-14"/></svg>';
+const reactionEmojis=[['❤️','Coração'],['👍','Joia'],['😂','Rindo'],['😮','Surpresa'],['🔥','Fogo'],['🥲','Sorrindo com lágrima'],['😍','Apaixonado'],['🥰','Carinho'],['😊','Sorriso'],['😁','Felicidade'],['😎','Estiloso'],['🤩','Encantado'],['😭','Chorando'],['😢','Triste'],['😅','Sorriso sem graça'],['🤣','Rindo muito'],['🤔','Pensando'],['👀','De olho'],['🙌','Celebrando'],['👏','Palmas'],['🤝','Aperto de mãos'],['💪','Força'],['🙏','Agradecimento'],['👌','Perfeito'],['💯','Cem por cento'],['✨','Brilho'],['🎉','Festa'],['🎵','Nota musical'],['🎶','Notas musicais'],['🎧','Fones'],['💿','Disco'],['🖤','Coração preto'],['💜','Coração roxo'],['💙','Coração azul'],['🤍','Coração branco'],['💔','Coração partido'],['🫶','Coração com as mãos']];
+const smileIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8 14a4.5 4.5 0 0 0 8 0M8.5 9h.01M15.5 9h.01"/></svg>';
 
 export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPost }) {
   const $=selector=>document.querySelector(selector);
@@ -16,10 +18,12 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   const search=$('#messages-search'),results=$('#messages-people'),list=$('#messages-conversations');
   const form=$('#message-form'),input=form.elements.text,send=form.querySelector('[type=submit]');
   const back=$('#messages-back'),older=$('#messages-older'),more=$('#messages-more');
+  const reactionDialog=$('#message-reaction-dialog'),reactionQuick=$('#message-reaction-quick'),reactionMore=$('#message-reaction-more');
   let owner=getAccount().user.id,summary={version:-1,unreadCount:0},person=null,items=[],conversations=[],cursor=null,inboxCursor=null;
   let request,searchRequest,generation=0,searchTimer,polling=false,sending=false,lastPoll=0,loadedVersion=-1,pendingPost=null,pendingShareId=null,submission=null;
   const drafts=new Map(),visible=new Set(),conversationCache=new Map(),conversationJobs=new Map();let reading=false,readTimer;
   let inboxLoaded=false,inboxVersion=-1,inboxJob=null,cacheEpoch=0;
+  const reactionJobs=new Map(),reactionChanges=new Map();let reactionTarget=null;
   const self=()=>getAccount().user.id;
   const observer=new IntersectionObserver(entries=>{
     if(!dialog.open||document.hidden)return;
@@ -33,7 +37,14 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     button.setAttribute('aria-label',value.unreadCount?`Mensagens: ${value.unreadCount} não lidas`:'Mensagens');
   }
   function resetRequest(){request?.abort();request=null;generation++;status.textContent='';}
+  function reconcileReactions(message,version){
+    const changed=reactionChanges.get(message.id);
+    if(changed&&version<changed.version)message.reactions=changed.reactions;
+    else if(changed)reactionChanges.delete(message.id);
+    return message;
+  }
   function rememberConversation(data){
+    data.items.forEach(item=>reconcileReactions(item,data.summary.version));
     conversationCache.delete(data.person.id);
     conversationCache.set(data.person.id,{...data,items:[...data.items],savedAt:Date.now()});
     if(conversationCache.size>20)conversationCache.delete(conversationCache.keys().next().value);
@@ -56,7 +67,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     if(conversationJobs.has(target))return conversationJobs.get(target).promise;
     const account=owner,epoch=cacheEpoch,controller=new AbortController(),job={controller};
     conversationJobs.set(target,job);
-    job.promise=api('/api/messages?'+new URLSearchParams({user:target}),{signal:controller.signal}).then(data=>{
+    const watched=person?.id===target?[...visible].slice(0,50):[];
+    job.promise=api('/api/messages?'+new URLSearchParams({user:target,...(watched.length?{reactions:watched.join(',')}:{})}),{signal:controller.signal}).then(data=>{
       if(account===self()&&epoch===cacheEpoch&&data.summary.version>=(conversationCache.get(target)?.summary.version??-1))rememberConversation(data);
       return data;
     }).finally(()=>{if(conversationJobs.get(target)===job)conversationJobs.delete(target);});
@@ -77,6 +89,49 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     const photo=$('#messages-avatar');photo.hidden=!value?.displayName;photo.innerHTML=value?.displayName?avatar(value):'';
   }
   function resizeInput(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,128)+'px';}
+  function ownReaction(reactions,emoji){
+    const result=(reactions||[]).map(item=>({...item,count:item.count-(item.mine?1:0),mine:false})).filter(item=>item.count>0);
+    if(emoji){let item=result.find(item=>item.emoji===emoji);if(!item){item={emoji,count:0,mine:false};result.push(item);}item.count++;item.mine=true;}
+    return result.sort((a,b)=>a.emoji.localeCompare(b.emoji));
+  }
+  function renderReactions(node,message){
+    const job=reactionJobs.get(message.id),reactions=job?ownReaction(message.reactions,job.emoji):(message.reactions||[]);
+    const holder=node.querySelector('.message-reactions'),signature=JSON.stringify([reactions,!!job]);
+    if(holder.dataset.signature!==signature){
+      holder.dataset.signature=signature;
+      holder.innerHTML=reactions.map(item=>{const label=reactionEmojis.find(([emoji])=>emoji===item.emoji)?.[1]||'Emoji';return `<button type="button" class="message-reaction${item.mine?' mine':''}" data-react-emoji="${escape(item.emoji)}" aria-pressed="${item.mine}" aria-label="${escape((item.mine?'Remover minha reação: ':'Reagir com ')+label)}" title="${escape(label)} · ${item.count===2?'Vocês dois':item.mine?'Você':'@'+(person?.handle||'')}" ${job?'disabled':''}><span aria-hidden="true">${escape(item.emoji)}</span><small>${item.count}</small></button>`;}).join('');
+    }
+    const control=node.querySelector('[data-message-react]');control.disabled=!!job;control.setAttribute('aria-busy',String(!!job));
+  }
+  function renderReactionPicker(){
+    const message=items.find(item=>item.id===reactionTarget),mine=message?.reactions?.find(item=>item.mine)?.emoji;
+    const emojiButton=([emoji,label])=>`<button type="button" data-pick-reaction="${escape(emoji)}" aria-label="${escape(label)}" aria-pressed="${mine===emoji}" title="${escape(label)}"><span aria-hidden="true">${emoji}</span></button>`;
+    reactionQuick.innerHTML=reactionEmojis.slice(0,5).map(emojiButton).join('')+'<button type="button" id="message-reaction-expand" aria-label="Mais emojis" aria-expanded="false" aria-controls="message-reaction-more"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>';
+    reactionMore.innerHTML=reactionEmojis.slice(5).map(emojiButton).join('');reactionMore.hidden=true;
+  }
+  async function reactToMessage(identifier,emoji){
+    const message=items.find(item=>item.id===identifier);if(!message||reactionJobs.has(identifier))return;
+    const desired=message.reactions?.some(item=>item.mine&&item.emoji===emoji)?null:emoji;
+    const job={emoji:desired,account:owner,epoch:cacheEpoch};reactionJobs.set(identifier,job);
+    const render=()=>{const node=[...thread.children].find(node=>node.dataset.message===identifier);const item=items.find(item=>item.id===identifier);if(node&&item)renderReactions(node,item);};
+    render();
+    try{
+      const data=await api('/api/messages/reaction',{method:'PUT',body:{messageId:identifier,emoji:desired}});
+      if(job.account!==self()||job.epoch!==cacheEpoch)return;
+      reactionChanges.set(identifier,{version:data.summary.version,reactions:data.reactions});
+      if(reactionChanges.size>100)reactionChanges.delete(reactionChanges.keys().next().value);
+      for(const item of items)if(item.id===identifier)item.reactions=data.reactions;
+      for(const cached of conversationCache.values())for(const item of cached.items)if(item.id===identifier)item.reactions=data.reactions;
+      updateSummary(data.summary);
+    }catch(error){if(job.account===self()&&job.epoch===cacheEpoch)toast(error.message);}
+    finally{if(reactionJobs.get(identifier)===job){reactionJobs.delete(identifier);render();}}
+  }
+  reactionDialog.addEventListener('click',event=>{
+    const expand=event.target.closest('#message-reaction-expand');
+    if(expand){reactionMore.hidden=!reactionMore.hidden;expand.setAttribute('aria-expanded',String(!reactionMore.hidden));if(!reactionMore.hidden)reactionMore.querySelector('button')?.focus();return;}
+    const choice=event.target.closest('[data-pick-reaction]');if(choice){const identifier=reactionTarget;reactionDialog.close();void reactToMessage(identifier,choice.dataset.pickReaction);}
+  });
+  reactionDialog.addEventListener('close',()=>{reactionTarget=null;});
   function renderInbox(){
     $('#messages-list-label').hidden=!conversations.length;
     list.innerHTML=conversations.length?conversations.map(item=>`<button type="button" class="message-conversation${item.unreadCount?' unread':''}" data-conversation="${escape(item.person.id)}">${avatar(item.person)}<span class="message-conversation-copy"><span class="message-conversation-name"><strong>${escape(item.person.displayName)}</strong><span>@${escape(item.person.handle)}</span></span><small>${escape(item.sentByMe?'Você: ':'')}${escape(item.preview)}</small></span><span class="message-conversation-meta"><time datetime="${escape(item.updatedAt)}" title="${escape(stamp(item.updatedAt))}">${escape(inboxTime(item.updatedAt))}</time>${item.unreadCount?`<span class="message-unread">${item.unreadCount>99?'99+':item.unreadCount}</span>`:''}</span></button>`).join(''):`<div class="empty message-empty">${emptyIcon}<h3>Nenhuma conversa ainda</h3><p>Busque alguém para enviar uma mensagem ou um Ressoa.</p></div>`;
@@ -103,8 +158,9 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
       if(node.dataset.signature!==signature){
         if(node.querySelector('.cover-play.playing'))stopPreview();
         node.dataset.signature=signature;
-        node.innerHTML=(message.kind==='text'?`<p class="message-text">${escape(message.text)}</p>`:ressoaMarkup(message))+`<time datetime="${escape(message.createdAt)}" title="${escape(stamp(message.createdAt))}" aria-label="${escape(stamp(message.createdAt))}">${escape(clock(message.createdAt))}</time>`;
+        node.innerHTML=(message.kind==='text'?`<p class="message-text">${escape(message.text)}</p>`:ressoaMarkup(message))+`<div class="message-footer"><span class="message-reactions" role="group" aria-label="Reações à mensagem"></span><button type="button" class="message-react" data-message-react="${escape(message.id)}" aria-label="Reagir à mensagem" aria-haspopup="dialog" aria-controls="message-reaction-dialog" title="Reagir">${smileIcon}</button><time datetime="${escape(message.createdAt)}" title="${escape(stamp(message.createdAt))}" aria-label="${escape(stamp(message.createdAt))}">${escape(clock(message.createdAt))}</time></div>`;
       }
+      renderReactions(node,message);
       if(thread.children[position]!==node)thread.insertBefore(node,thread.children[position]||null);
       position++;observer.observe(node);nodes.delete(message.id);
     }
@@ -134,6 +190,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
       if(token!==generation||account!==self()||person?.id!==target||!dialog.open)return;
       person=data.person;
       renderHeader(person);
+      for(const item of items)if(Object.hasOwn(data.reactions||{},item.id)){item.reactions=data.reactions[item.id];reconcileReactions(item,data.summary.version);}
+      data.items.forEach(item=>reconcileReactions(item,data.summary.version));
       const kept=initial?items.filter(item=>item.senderId===account&&!existing.has(item.id)):items;
       const known=new Map(kept.map(item=>[item.id,item]));data.items.forEach(item=>known.set(item.id,item));
       items=[...known.values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
@@ -144,6 +202,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     finally{if(token===generation){request=null;older.disabled=false;thread.setAttribute('aria-busy','false');}}
   }
   function showInbox(){
+    if(reactionDialog.open)reactionDialog.close();
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();person=null;items=[];cursor=null;observer.disconnect();visible.clear();
     inbox.hidden=false;chat.hidden=true;back.hidden=true;loadedVersion=inboxVersion;renderHeader();
     if(inboxLoaded)renderInbox();else{list.innerHTML=loadingContent();more.hidden=true;}
@@ -151,6 +210,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   }
   async function start(target){
     if(target===self())return;
+    if(reactionDialog.open)reactionDialog.close();
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();searchRequest?.abort();
     const saved=conversationCache.get(target),cached=saved&&Date.now()-saved.savedAt<300000?saved:null;
     person=cached?.person||conversations.find(item=>item.person.id===target)?.person||{id:target,handle:'',displayName:'',photo:''};
@@ -216,6 +276,10 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   });
   $('#messages-cancel-post').addEventListener('click',()=>{pendingPost=null;pendingShareId=null;updatePending();});
   thread.addEventListener('click',event=>{
+    const reaction=event.target.closest('[data-message-react],[data-react-emoji]');
+    if(reaction){const identifier=reaction.closest('[data-message]').dataset.message;
+      if(reaction.hasAttribute('data-react-emoji'))void reactToMessage(identifier,reaction.dataset.reactEmoji);
+      else{reactionTarget=identifier;renderReactionPicker();reactionDialog.showModal();}return;}
     const play=event.target.closest('[data-dm-play]');if(play){const message=items.find(item=>item.id===play.dataset.dmPlay);if(message?.post)onPlay(play,message.trackIndex??registerTrack(message.post.track),event,message.post.audioExcerpt);return;}
     const open=event.target.closest('[data-dm-open-post]');if(open){dialog.close();onOpenPost(open.dataset.dmOpenPost);}
   });
@@ -234,7 +298,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   list.addEventListener('click',event=>{const item=event.target.closest('[data-conversation]');if(item)void start(item.dataset.conversation);});
   button.addEventListener('click',()=>{pendingPost=null;pendingShareId=null;if(!dialog.open)dialog.showModal();showInbox();});
   back.addEventListener('click',showInbox);more.addEventListener('click',()=>void loadInbox(true));older.addEventListener('click',()=>void loadConversation(true));
-  dialog.addEventListener('close',()=>{stopPreview();resetRequest();searchRequest?.abort();clearTimeout(searchTimer);clearTimeout(readTimer);observer.disconnect();visible.clear();if(person)drafts.set(person.id,input.value);});
+  dialog.addEventListener('close',()=>{if(reactionDialog.open)reactionDialog.close();stopPreview();resetRequest();searchRequest?.abort();clearTimeout(searchTimer);clearTimeout(readTimer);observer.disconnect();visible.clear();if(person)drafts.set(person.id,input.value);});
   async function poll(force=false){
     if(document.hidden||polling||request||(!force&&!dialog.open&&Date.now()-lastPoll<8000))return;
     polling=true;lastPoll=Date.now();const account=owner;
@@ -254,6 +318,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     inboxJob?.controller.abort();inboxJob=null;if(dialog.open)dialog.close();resetRequest();
     conversationJobs.forEach(job=>job.controller.abort());conversationJobs.clear();
     person=null;items=[];conversations=[];conversationCache.clear();drafts.clear();thread.replaceChildren();list.replaceChildren();
+    reactionJobs.clear();reactionChanges.clear();
     inboxLoaded=false;inboxVersion=-1;loadedVersion=-1;pendingPost=null;submission=null;summary={version:-1,unreadCount:0};updateSummary(summary);
   }
   window.addEventListener('sessionexpired',clearMemory);

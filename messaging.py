@@ -6,6 +6,9 @@ import uuid
 from datetime import datetime
 from database import APIError, clean_track, now_iso, text
 
+REACTION_EMOJIS = ('❤️','👍','😂','😮','🔥','🥲','😍','🥰','😊','😁','😎','🤩','😭','😢','😅','🤣','🤔','👀',
+                   '🙌','👏','🤝','💪','🙏','👌','💯','✨','🎉','🎵','🎶','🎧','💿','🖤','💜','💙','🤍','💔','🫶')
+
 
 class Messaging:
     def __init__(self, database):
@@ -88,7 +91,7 @@ class Messaging:
 
     def message(self, db, user_id, row, posts=None):
         result = dict(id=row['id'], senderId=row['sender_id'], kind=row['kind'], text=row['text'],
-                      createdAt=row['created_at'], readAt=row['read_at'], post=None, unavailable=False)
+                      createdAt=row['created_at'], readAt=row['read_at'], post=None, unavailable=False, reactions=[])
         if row['kind'] == 'ressoa':
             result['post'] = dict(json.loads(row['payload']), id=row['id'], ownerId=row['sender_id'], kind='direct', visibility='direct')
         elif row['kind'] == 'post':
@@ -107,19 +110,37 @@ class Messaging:
                 result['unavailable'] = True
         return result
 
-    def conversation(self, user_id, target, cursor=''):
+    @staticmethod
+    def group_reactions(rows, user_id):
+        grouped = {}
+        for row in rows:
+            reactions = grouped.setdefault(row['message_id'], {})
+            reaction = reactions.setdefault(row['emoji'], dict(emoji=row['emoji'], count=0, mine=False))
+            reaction['count'] += 1
+            reaction['mine'] = reaction['mine'] or row['user_id'] == user_id
+        return {identifier: sorted(values.values(), key=lambda item:item['emoji']) for identifier,values in grouped.items()}
+
+    def conversation(self, user_id, target, cursor='', reaction_ids=''):
         before = self.cursor(cursor)
         target = self.identifier(target)
         if target == user_id:
             raise APIError(404, 'Escolha outra pessoa para conversar.')
         a, b = sorted((user_id, target))
         restriction = ' AND (created_at,id)<(?,?)' if before else ''
+        if not isinstance(reaction_ids,str) or len(reaction_ids)>5050 or len(reaction_ids.split(','))>50:
+            raise APIError(400, 'Mensagens inválidas.')
+        extra = tuple(dict.fromkeys(self.identifier(value) for value in reaction_ids.split(',') if value))
+        extra_sql = ' OR m.id IN ('+','.join('?' for _ in extra)+')' if extra else ''
+        page_sql = f'SELECT id FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) {restriction} ORDER BY created_at DESC,id DESC LIMIT 50'
         with self.db.connect() as db:
-            _, people, rows, summary = db.fetch_many([
+            _, people, rows, summary, reaction_rows = db.fetch_many([
                 ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN', ()),
                 ('SELECT id,username,display_name,photo FROM users WHERE id=?', (target,)),
                 (f'''SELECT * FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) {restriction}
-                    ORDER BY created_at DESC,id DESC LIMIT 51''', (a, b, *(before or ()))), self.summary_query(user_id)])
+                    ORDER BY created_at DESC,id DESC LIMIT 51''', (a, b, *(before or ()))), self.summary_query(user_id),
+                (f'''SELECT r.message_id,r.user_id,r.emoji FROM dm_reactions r
+                    JOIN dm_messages m ON m.id=r.message_id JOIN dm_threads t ON t.id=m.thread_id
+                    WHERE t.user_a=? AND t.user_b=? AND (m.id IN ({page_sql}) {extra_sql})''', (a,b,a,b,*(before or ()),*extra))])
             if not people:
                 raise APIError(404, 'Escolha outra pessoa para conversar.')
             # Shared posts are reauthorized together, including expired weekly choices.
@@ -132,8 +153,34 @@ class Messaging:
                     self.db.cache_accessible(db, post)
                     posts[post['id']] = self.db.post(db, post)
             next_cursor = self.encode_cursor(rows[49]['created_at'], rows[49]['id']) if len(rows) > 50 else None
-            return dict(person=self.db.person(people[0]), items=[self.message(db, user_id, row, posts) for row in reversed(rows[:50])],
+            reactions = {identifier:[] for identifier in extra}
+            reactions.update(self.group_reactions(reaction_rows, user_id))
+            items = [self.message(db, user_id, row, posts) for row in reversed(rows[:50])]
+            for item in items:
+                item['reactions'] = reactions.get(item['id'], [])
+            return dict(person=self.db.person(people[0]), items=items, reactions=reactions,
                         nextCursor=next_cursor, summary=dict(version=summary[0]['version'], unreadCount=summary[0]['unread_count']))
+
+    def react(self, user_id, data):
+        identifier = self.identifier(data.get('messageId'))
+        emoji = data.get('emoji')
+        if emoji is not None and (not isinstance(emoji,str) or emoji not in REACTION_EMOJIS):
+            raise APIError(400, 'Escolha um dos emojis disponíveis.')
+        with self.db.transaction() as db:
+            message = db.execute('''SELECT t.user_a,t.user_b FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
+                WHERE m.id=? AND (t.user_a=? OR t.user_b=?)''',(identifier,user_id,user_id)).fetchone()
+            if not message:
+                raise APIError(404, 'Mensagem não encontrada.')
+            if emoji is None:
+                changed = db.execute('DELETE FROM dm_reactions WHERE message_id=? AND user_id=? RETURNING message_id',(identifier,user_id)).fetchone()
+            else:
+                changed = db.execute('''INSERT INTO dm_reactions VALUES (?,?,?,?) ON CONFLICT(message_id,user_id)
+                    DO UPDATE SET emoji=excluded.emoji,created_at=excluded.created_at
+                    WHERE dm_reactions.emoji<>excluded.emoji RETURNING message_id''',(identifier,user_id,emoji,now_iso())).fetchone()
+            if changed:
+                db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id IN (?,?)',(message['user_a'],message['user_b']))
+            rows = db.execute('SELECT message_id,user_id,emoji FROM dm_reactions WHERE message_id=?',(identifier,)).fetchall()
+            return dict(messageId=identifier, reactions=self.group_reactions(rows,user_id).get(identifier,[]), summary=self.summary(user_id,db))
 
     def ressoa_payload(self, value):
         if not isinstance(value, dict):

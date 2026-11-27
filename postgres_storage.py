@@ -199,3 +199,4 @@ def initialize(dsn, sqlite_schema):
         db.execute('INSERT INTO ressoa_schema VALUES (9) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (10) ON CONFLICT DO NOTHING')
         db.execute('INSERT INTO ressoa_schema VALUES (11) ON CONFLICT DO NOTHING')
+        db.execute('INSERT INTO ressoa_schema VALUES (12) ON CONFLICT DO NOTHING')

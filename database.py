@@ -219,9 +219,15 @@ CREATE TABLE IF NOT EXISTS dm_messages (
 CREATE INDEX IF NOT EXISTS dm_messages_thread ON dm_messages(thread_id,created_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS dm_messages_unread ON dm_messages(thread_id,sender_id) WHERE read_at IS NULL;
 CREATE INDEX IF NOT EXISTS dm_messages_post ON dm_messages(post_id) WHERE post_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS dm_reactions (
+ message_id TEXT NOT NULL REFERENCES dm_messages(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ emoji TEXT NOT NULL, created_at TEXT NOT NULL,
+ PRIMARY KEY(message_id,user_id)
+);
 CREATE INDEX IF NOT EXISTS dm_threads_a ON dm_threads(user_a);
 CREATE INDEX IF NOT EXISTS dm_threads_b ON dm_threads(user_b);
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 """
 
 

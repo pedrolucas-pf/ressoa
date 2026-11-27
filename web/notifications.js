@@ -30,10 +30,27 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       row.className = `person-row request-row notification-row${item.unread ? ' unread' : ''}`;
       row.dataset.notification = key(item);
       row.innerHTML = identity(item.person);
-      const details = row.querySelector('.person-identity > span:last-child');
-      const message = document.createElement('small');
+      const profile = row.querySelector('.person-identity');
+      const avatar = profile.cloneNode(false);
+      avatar.className = 'person-link notification-avatar';
+      avatar.setAttribute('aria-label','Ver perfil de '+item.person.displayName);
+      avatar.append(profile.firstElementChild);
+      profile.className = 'person-link notification-person-link';
+      const name = document.createElement('span');
+      name.className = 'notification-person-name';
+      const names = profile.firstElementChild;
+      name.append(names.firstChild);names.prepend(name);
+      const person = document.createElement('div');person.className='person-identity';
+      const details = document.createElement('div');details.className='notification-copy';
+      profile.replaceWith(person);details.append(profile);person.append(avatar,details);
+      const message = document.createElement(item.kind==='comment'?'button':'span');
       message.className = 'notification-message';
       message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa',mention:'Marcou você em um Ressoa'})[item.kind];
+      if(item.kind==='comment'){
+        message.type='button';message.dataset.notificationPost=item.postId;message.dataset.notificationComment='true';
+        message.title='Ver comentários';message.setAttribute('aria-label','Ver comentários deste Ressoa');
+        message.insertAdjacentHTML('beforeend','<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/></svg>');
+      }
       const time = document.createElement('time');
       time.dateTime = item.createdAt;
       time.textContent = new Date(item.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -49,10 +66,11 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
         }
       } else if (item.kind === 'follow') actions.innerHTML = followButton(item.person);
       else {
-        const link=document.createElement('a');link.className='text-button';
+        const link=document.createElement('a');link.className='notification-post';
         link.href='#ressoa/'+encodeURIComponent(item.postId);link.dataset.notificationPost=item.postId;
-        if(item.kind==='comment')link.dataset.notificationComment='true';
-        link.textContent=item.trackTitle||'Ver Ressoa';actions.append(link);
+        const label=document.createElement('span');label.textContent='Ver Ressoa';
+        const title=document.createElement('strong');title.textContent=item.trackTitle||'Abrir publicação';
+        link.append(label,title);link.setAttribute('aria-label','Ver Ressoa: '+(item.trackTitle||'publicação'));actions.append(link);
       }
       row.append(actions);
       const dismiss = document.createElement('button');

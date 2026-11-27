@@ -239,7 +239,10 @@ class Application:
                 if path == '/api/messages/summary':
                     return 200,dict(summary=self.messages.summary(user_id)),[]
                 if path == '/api/messages':
-                    return 200,(self.messages.conversation(user_id,value('user'),value('cursor')) if value('user') else self.messages.inbox(user_id,value('cursor'))),[]
+                    return 200,(self.messages.conversation(user_id,value('user'),value('cursor'),value('reactions')) if value('user') else self.messages.inbox(user_id,value('cursor'))),[]
+            if path == '/api/messages/reaction' and method == 'PUT':
+                self.db.limit('messages-react:'+user_id,90,60)
+                return 200,self.messages.react(user_id,data),[]
             if path == '/api/messages' and method == 'POST':
                 self.db.limit('messages-send:'+user_id,40,60)
                 return 200,self.messages.send(user_id,data),[]

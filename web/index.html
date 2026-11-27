@@ -146,6 +146,11 @@
     <section id="messages-chat" hidden><button type="button" class="text-button" id="messages-older" hidden>Mensagens anteriores</button><div id="messages-thread" role="log" aria-label="Mensagens da conversa" aria-live="polite" aria-relevant="additions text"></div><div id="messages-pending" hidden><span id="messages-pending-label"></span><button type="button" class="button" id="messages-send-post">Enviar Ressoa</button><button type="button" class="icon-button" id="messages-cancel-post" aria-label="Cancelar envio do Ressoa">×</button></div><form id="message-form"><button type="button" class="icon-button" id="message-compose" aria-label="Criar um Ressoa nesta conversa" title="Criar um Ressoa"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><label class="sr-only" for="message-text">Mensagem</label><textarea id="message-text" name="text" rows="1" maxlength="2400" placeholder="Escreva uma mensagem…" required></textarea><button type="submit" class="icon-button" aria-label="Enviar mensagem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></form></section>
     <p class="form-note" id="messages-status" role="status"></p>
   </dialog>
+  <dialog id="message-reaction-dialog" aria-labelledby="message-reaction-title">
+    <div class="dialog-heading"><h2 id="message-reaction-title">Reagir</h2><button type="button" class="icon-button" data-close="message-reaction-dialog" aria-label="Fechar emojis">×</button></div>
+    <div id="message-reaction-quick" class="message-emoji-grid" role="group" aria-label="Reações rápidas"></div>
+    <div id="message-reaction-more" class="message-emoji-grid" role="group" aria-label="Mais emojis" hidden></div>
+  </dialog>
   <dialog id="reader" aria-labelledby="reader-title">
     <button class="close icon-button" data-close="reader" aria-label="Fechar leitura">×</button>
     <div id="reader-content"></div>
