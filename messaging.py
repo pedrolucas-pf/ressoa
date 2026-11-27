@@ -55,7 +55,7 @@ class Messaging:
 
     @staticmethod
     def summary_query(user_id):
-        return ('''SELECT messages_version AS version,
+        return ('''SELECT messages_version AS version,notifications_version,
             (SELECT COUNT(*) FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
              WHERE (t.user_a=? OR t.user_b=?) AND m.sender_id<>? AND m.read_at IS NULL) AS unread_count
             FROM users WHERE id=?''', (user_id, user_id, user_id, user_id))
@@ -65,7 +65,11 @@ class Messaging:
             with self.db.connect() as connection:
                 return self.summary(user_id, connection)
         row = db.execute(*self.summary_query(user_id)).fetchone()
-        return dict(version=row['version'], unreadCount=row['unread_count'])
+        return self.summary_value(row)
+
+    @staticmethod
+    def summary_value(row):
+        return dict(version=row['version'], unreadCount=row['unread_count'], notificationsVersion=row['notifications_version'])
 
     def inbox(self, user_id, cursor=''):
         before = self.cursor(cursor)
@@ -87,7 +91,7 @@ class Messaging:
                           sentByMe=row['sender_id'] == user_id) for row in rows[:30]]
             next_cursor = self.encode_cursor(rows[29]['created_at'], rows[29]['thread_id']) if len(rows) > 30 else None
             return dict(items=items, nextCursor=next_cursor,
-                        summary=dict(version=summary[0]['version'], unreadCount=summary[0]['unread_count']))
+                        summary=self.summary_value(summary[0]))
 
     def message(self, db, user_id, row, posts=None):
         result = dict(id=row['id'], senderId=row['sender_id'], kind=row['kind'], text=row['text'],
@@ -140,7 +144,7 @@ class Messaging:
                     ORDER BY created_at DESC,id DESC LIMIT 51''', (a, b, *(before or ()))), self.summary_query(user_id),
                 (f'''SELECT r.message_id,r.user_id,r.emoji FROM dm_reactions r
                     JOIN dm_messages m ON m.id=r.message_id JOIN dm_threads t ON t.id=m.thread_id
-                    WHERE t.user_a=? AND t.user_b=? AND (m.id IN ({page_sql}) {extra_sql})''', (a,b,a,b,*(before or ()),*extra))])
+                    WHERE t.user_a=? AND t.user_b=? AND r.user_id<>m.sender_id AND (m.id IN ({page_sql}) {extra_sql})''', (a,b,a,b,*(before or ()),*extra))])
             if not people:
                 raise APIError(404, 'Escolha outra pessoa para conversar.')
             # Shared posts are reauthorized together, including expired weekly choices.
@@ -159,7 +163,7 @@ class Messaging:
             for item in items:
                 item['reactions'] = reactions.get(item['id'], [])
             return dict(person=self.db.person(people[0]), items=items, reactions=reactions,
-                        nextCursor=next_cursor, summary=dict(version=summary[0]['version'], unreadCount=summary[0]['unread_count']))
+                        nextCursor=next_cursor, summary=self.summary_value(summary[0]))
 
     def react(self, user_id, data):
         identifier = self.identifier(data.get('messageId'))
@@ -167,10 +171,12 @@ class Messaging:
         if emoji is not None and (not isinstance(emoji,str) or emoji not in REACTION_EMOJIS):
             raise APIError(400, 'Escolha um dos emojis disponíveis.')
         with self.db.transaction() as db:
-            message = db.execute('''SELECT t.user_a,t.user_b FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
+            message = db.execute('''SELECT t.user_a,t.user_b,m.sender_id FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
                 WHERE m.id=? AND (t.user_a=? OR t.user_b=?)''',(identifier,user_id,user_id)).fetchone()
             if not message:
                 raise APIError(404, 'Mensagem não encontrada.')
+            if message['sender_id']==user_id:
+                raise APIError(403, 'Você só pode reagir às mensagens da outra pessoa.')
             if emoji is None:
                 changed = db.execute('DELETE FROM dm_reactions WHERE message_id=? AND user_id=? RETURNING message_id',(identifier,user_id)).fetchone()
             else:
@@ -179,7 +185,14 @@ class Messaging:
                     WHERE dm_reactions.emoji<>excluded.emoji RETURNING message_id''',(identifier,user_id,emoji,now_iso())).fetchone()
             if changed:
                 db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id IN (?,?)',(message['user_a'],message['user_b']))
-            rows = db.execute('SELECT message_id,user_id,emoji FROM dm_reactions WHERE message_id=?',(identifier,)).fetchall()
+                if emoji is None:
+                    db.execute('DELETE FROM dm_reaction_notifications WHERE user_id=? AND message_id=? AND actor_id=?',(message['sender_id'],identifier,user_id))
+                else:
+                    db.execute('''INSERT INTO dm_reaction_notifications VALUES (?,?,?,?,?,NULL)
+                        ON CONFLICT(user_id,message_id) DO UPDATE SET actor_id=excluded.actor_id,emoji=excluded.emoji,
+                        created_at=excluded.created_at,read_at=NULL''',(message['sender_id'],user_id,identifier,emoji,now_iso()))
+                self.db.bump_notifications(db,message['sender_id'])
+            rows = db.execute('SELECT message_id,user_id,emoji FROM dm_reactions WHERE message_id=? AND user_id<>?',(identifier,message['sender_id'])).fetchall()
             return dict(messageId=identifier, reactions=self.group_reactions(rows,user_id).get(identifier,[]), summary=self.summary(user_id,db))
 
     def ressoa_payload(self, value):

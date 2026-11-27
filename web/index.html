@@ -224,7 +224,7 @@
   <dialog id="people-dialog" aria-labelledby="people-title"><div class="dialog-heading"><h2 id="people-title">Curtidas e reposts</h2><button class="icon-button" data-close="people-dialog" aria-label="Fechar pessoas">×</button></div><div id="people-content"></div></dialog>
   <dialog id="comments-dialog" aria-labelledby="comments-title">
     <div class="dialog-heading"><h2 id="comments-title">Comentários</h2><button type="button" class="icon-button" data-close="comments-dialog" aria-label="Fechar comentários">×</button></div>
-    <div id="comments-list"></div><p id="comments-status" class="form-note" role="status"></p>
+    <div id="comments-list" tabindex="0" role="region" aria-label="Lista de comentários"></div><p id="comments-status" class="form-note" role="status"></p>
     <button type="button" class="text-button" id="comments-more" hidden>Ver mais comentários</button><button type="button" class="text-button" id="comments-retry" hidden>Tentar novamente</button>
     <form id="comment-form"><label for="comment-text">Seu comentário</label><textarea id="comment-text" name="comment" required maxlength="1000" rows="3" placeholder="O que essa música te faz pensar?"></textarea><button type="submit" class="button primary">Enviar</button></form>
   </dialog>
