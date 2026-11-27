@@ -69,26 +69,33 @@ class Messaging:
         restriction = ' AND (m.created_at,t.id)<(?,?)' if before else ''
         params = (user_id, user_id, user_id, user_id, user_id, *(before or ()))
         with self.db.connect() as db:
-            db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN')
-            rows = db.execute(f'''SELECT t.id AS thread_id,m.created_at,m.kind,m.text,m.sender_id,
+            # PostgreSQL pipelines these independent reads in one network round trip.
+            _, rows, summary = db.fetch_many([
+                ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN', ()),
+                (f'''SELECT t.id AS thread_id,m.created_at,m.kind,m.text,m.sender_id,
                 u.id,u.username,u.display_name,u.photo,
                 (SELECT COUNT(*) FROM dm_messages n WHERE n.thread_id=t.id AND n.sender_id<>? AND n.read_at IS NULL) AS unread_count
                 FROM dm_threads t JOIN users u ON u.id=CASE WHEN t.user_a=? THEN t.user_b ELSE t.user_a END
                 JOIN dm_messages m ON m.id=(SELECT id FROM dm_messages WHERE thread_id=t.id ORDER BY created_at DESC,id DESC LIMIT 1)
                 WHERE (t.user_a=? OR t.user_b=?) AND u.id<>? {restriction}
-                ORDER BY m.created_at DESC,t.id DESC LIMIT 31''', params).fetchall()
+                ORDER BY m.created_at DESC,t.id DESC LIMIT 31''', params), self.summary_query(user_id)])
             items = [dict(person=self.db.person(row), updatedAt=row['created_at'], unreadCount=row['unread_count'],
                           preview=row['text'][:120] if row['kind'] == 'text' else 'Enviou um Ressoa',
                           sentByMe=row['sender_id'] == user_id) for row in rows[:30]]
             next_cursor = self.encode_cursor(rows[29]['created_at'], rows[29]['thread_id']) if len(rows) > 30 else None
-            return dict(items=items, nextCursor=next_cursor, summary=self.summary(user_id, db))
+            return dict(items=items, nextCursor=next_cursor,
+                        summary=dict(version=summary[0]['version'], unreadCount=summary[0]['unread_count']))
 
-    def message(self, db, user_id, row):
+    def message(self, db, user_id, row, posts=None):
         result = dict(id=row['id'], senderId=row['sender_id'], kind=row['kind'], text=row['text'],
                       createdAt=row['created_at'], readAt=row['read_at'], post=None, unavailable=False)
         if row['kind'] == 'ressoa':
             result['post'] = dict(json.loads(row['payload']), id=row['id'], ownerId=row['sender_id'], kind='direct', visibility='direct')
         elif row['kind'] == 'post':
+            if posts is not None:
+                result['post'] = posts.get(row['post_id'])
+                result['unavailable'] = result['post'] is None
+                return result
             try:
                 if not row['post_id']:
                     raise APIError(404, 'Ressoa indisponível.')
@@ -102,18 +109,31 @@ class Messaging:
 
     def conversation(self, user_id, target, cursor=''):
         before = self.cursor(cursor)
+        target = self.identifier(target)
+        if target == user_id:
+            raise APIError(404, 'Escolha outra pessoa para conversar.')
+        a, b = sorted((user_id, target))
+        restriction = ' AND (created_at,id)<(?,?)' if before else ''
         with self.db.connect() as db:
-            db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN')
-            person = self.person(db, user_id, target)
-            thread = self.thread(db, user_id, target)
-            if not thread:
-                return dict(person=person, items=[], nextCursor=None, summary=self.summary(user_id, db))
-            restriction = ' AND (created_at,id)<(?,?)' if before else ''
-            rows = db.execute(f'''SELECT * FROM dm_messages WHERE thread_id=? {restriction}
-                ORDER BY created_at DESC,id DESC LIMIT 51''', (thread['id'], *(before or ()))).fetchall()
+            _, people, rows, summary = db.fetch_many([
+                ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN', ()),
+                ('SELECT id,username,display_name,photo FROM users WHERE id=?', (target,)),
+                (f'''SELECT * FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) {restriction}
+                    ORDER BY created_at DESC,id DESC LIMIT 51''', (a, b, *(before or ()))), self.summary_query(user_id)])
+            if not people:
+                raise APIError(404, 'Escolha outra pessoa para conversar.')
+            # Shared posts are reauthorized together, including expired weekly choices.
+            identifiers = tuple({row['post_id'] for row in rows[:50] if row['kind'] == 'post' and row['post_id']})
+            posts = {}
+            if identifiers:
+                for post in db.execute(*self.db.accessible_query(user_id, identifiers)).fetchall():
+                    if post['kind'] == 'weekly' and not post['active_week']:
+                        continue
+                    self.db.cache_accessible(db, post)
+                    posts[post['id']] = self.db.post(db, post)
             next_cursor = self.encode_cursor(rows[49]['created_at'], rows[49]['id']) if len(rows) > 50 else None
-            return dict(person=person, items=[self.message(db, user_id, row) for row in reversed(rows[:50])],
-                        nextCursor=next_cursor, summary=self.summary(user_id, db))
+            return dict(person=self.db.person(people[0]), items=[self.message(db, user_id, row, posts) for row in reversed(rows[:50])],
+                        nextCursor=next_cursor, summary=dict(version=summary[0]['version'], unreadCount=summary[0]['unread_count']))
 
     def ressoa_payload(self, value):
         if not isinstance(value, dict):

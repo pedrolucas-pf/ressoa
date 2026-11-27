@@ -630,21 +630,30 @@ class Database:
                 ON CONFLICT(user_id,post_id) DO NOTHING RETURNING user_id''',(recipient,actor,post_id,now_iso())).fetchone():
                 self.bump_notifications(db,recipient)
 
-    def accessible(self, db, user_id, post_id, public=False):
+    @staticmethod
+    def accessible_query(user_id, post_ids, public=False):
         visibility = " AND p.visibility='public'" if public else ''
-        row = db.execute(f'''SELECT p.*,t.data AS track_data,u.display_name AS owner_name,
+        marks = ','.join('?' for _ in post_ids)
+        return (f'''SELECT p.*,t.data AS track_data,u.display_name AS owner_name,
             u.username AS owner_handle,u.photo AS owner_photo,u.is_private AS owner_private,
             EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL) AS active_week
             FROM posts p JOIN users u ON u.id=p.owner_id JOIN tracks t ON t.id=p.track_id
-            WHERE p.id=? AND (p.owner_id=? OR p.visibility='public') AND
+            WHERE p.id IN ({marks}) AND (p.owner_id=? OR p.visibility='public') AND
                 (u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id)){visibility}''',
-            (current_week(),post_id,user_id,user_id,user_id)).fetchone()
+            (current_week(),*post_ids,user_id,user_id,user_id))
+
+    @staticmethod
+    def cache_accessible(db, row):
+        db._track_cache[row['track_id']]=json.loads(row['track_data'])
+        db._person_cache[row['owner_id']]=dict(display_name=row['owner_name'],username=row['owner_handle'],photo=row['owner_photo'],is_private=row['owner_private'])
+
+    def accessible(self, db, user_id, post_id, public=False):
+        row = db.execute(*self.accessible_query(user_id,(post_id,),public)).fetchone()
         if not row:
             raise APIError(404, 'Ressoa não encontrada.')
         if row['kind'] == 'weekly' and not row['active_week']:
             raise APIError(404, 'Este destaque já terminou.')
-        db._track_cache[row['track_id']]=json.loads(row['track_data'])
-        db._person_cache[row['owner_id']]=dict(display_name=row['owner_name'],username=row['owner_handle'],photo=row['owner_photo'],is_private=row['owner_private'])
+        self.cache_accessible(db, row)
         return row
 
     def shared_post(self, user_id, post_id):

@@ -18,7 +18,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   const back=$('#messages-back'),older=$('#messages-older'),more=$('#messages-more');
   let owner=getAccount().user.id,summary={version:-1,unreadCount:0},person=null,items=[],conversations=[],cursor=null,inboxCursor=null;
   let request,searchRequest,generation=0,searchTimer,polling=false,sending=false,lastPoll=0,loadedVersion=-1,pendingPost=null,pendingShareId=null,submission=null;
-  const drafts=new Map(),visible=new Set();let reading=false,readTimer;
+  const drafts=new Map(),visible=new Set(),conversationCache=new Map(),conversationJobs=new Map();let reading=false,readTimer;
+  let inboxLoaded=false,inboxVersion=-1,inboxJob=null,cacheEpoch=0;
   const self=()=>getAccount().user.id;
   const observer=new IntersectionObserver(entries=>{
     if(!dialog.open||document.hidden)return;
@@ -32,6 +33,36 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     button.setAttribute('aria-label',value.unreadCount?`Mensagens: ${value.unreadCount} não lidas`:'Mensagens');
   }
   function resetRequest(){request?.abort();request=null;generation++;status.textContent='';}
+  function rememberConversation(data){
+    conversationCache.delete(data.person.id);
+    conversationCache.set(data.person.id,{...data,items:[...data.items],savedAt:Date.now()});
+    if(conversationCache.size>20)conversationCache.delete(conversationCache.keys().next().value);
+  }
+  function fetchInbox(){
+    if(inboxJob)return inboxJob.promise;
+    const account=owner,epoch=cacheEpoch,controller=new AbortController(),job={controller};
+    inboxJob=job;
+    job.promise=api('/api/messages',{signal:controller.signal}).then(data=>{
+      if(account!==self()||epoch!==cacheEpoch)return;
+      conversations=data.items;inboxCursor=data.nextCursor;inboxLoaded=true;inboxVersion=data.summary.version;
+      updateSummary(data.summary);
+      const recent=data.items[0]?.person.id,cached=conversationCache.get(recent);
+      if(!dialog.open&&recent&&(!cached||Date.now()-cached.savedAt>=300000))void fetchConversation(recent).catch(()=>{});
+      return data;
+    }).finally(()=>{if(inboxJob===job)inboxJob=null;});
+    return job.promise;
+  }
+  function fetchConversation(target){
+    if(conversationJobs.has(target))return conversationJobs.get(target).promise;
+    const account=owner,epoch=cacheEpoch,controller=new AbortController(),job={controller};
+    conversationJobs.set(target,job);
+    job.promise=api('/api/messages?'+new URLSearchParams({user:target}),{signal:controller.signal}).then(data=>{
+      if(account===self()&&epoch===cacheEpoch&&data.summary.version>=(conversationCache.get(target)?.summary.version??-1))rememberConversation(data);
+      return data;
+    }).finally(()=>{if(conversationJobs.get(target)===job)conversationJobs.delete(target);});
+    return job.promise;
+  }
+  function loadingContent(){return '<div class="messages-loading" aria-hidden="true"><span></span><span></span><span></span></div>';}
   function updatePending(){
     const panel=$('#messages-pending');panel.hidden=!pendingPost||!person;
     $('#messages-pending-label').textContent=person?`Enviar este Ressoa para @${person.handle}`:'';
@@ -52,6 +83,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     more.hidden=!inboxCursor;
   }
   function ressoaMarkup(message){
+    if(message.loading)return '<p class="form-note">Atualizando Ressoa…</p>';
     const post=message.post;if(message.unavailable||!post)return '<p class="form-note">Este Ressoa não está mais disponível para você.</p>';
     const track=post.track,index=registerTrack(track);message.trackIndex=index;
     const attribution=track.provider==='spotify'?`<a class="spotify-attribution" href="${escape(track.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvir no Spotify"><img src="assets/spotify-white.svg" alt="Spotify" width="60" height="18"></a>`:'';
@@ -65,7 +97,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     thread.querySelector('.empty')?.remove();
     let position=0;
     for(const message of items){
-      let node=nodes.get(message.id);const signature=JSON.stringify([message.kind,message.text,message.post,message.unavailable]);
+      let node=nodes.get(message.id);const signature=JSON.stringify([message.kind,message.text,message.post,message.unavailable,message.loading]);
       if(!node){node=document.createElement('article');node.dataset.message=message.id;}
       node.className='message-bubble'+(message.senderId===self()?' sent':' received')+(message.kind!=='text'?' has-ressoa':'');
       if(node.dataset.signature!==signature){
@@ -84,44 +116,51 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   }
   async function loadInbox(append=false){
     resetRequest();request=new AbortController();const token=generation,account=owner;
-    status.textContent='Carregando…';more.disabled=true;
+    if(!inboxLoaded||append)status.textContent='Carregando…';more.disabled=true;
+    list.setAttribute('aria-busy',String(!inboxLoaded));
     try{
-      const data=await api('/api/messages'+(append&&inboxCursor?'?'+new URLSearchParams({cursor:inboxCursor}):''),{signal:request.signal});
+      const data=append?await api('/api/messages?'+new URLSearchParams({cursor:inboxCursor}),{signal:request.signal}):await fetchInbox();
       if(token!==generation||account!==self()||person||!dialog.open)return;
-      const known=new Map((append?conversations:[]).map(item=>[item.person.id,item]));data.items.forEach(item=>known.set(item.person.id,item));
-      conversations=[...known.values()];inboxCursor=data.nextCursor;if(!append)loadedVersion=data.summary.version;updateSummary(data.summary);renderInbox();status.textContent='';
+      if(append){const known=new Map(conversations.map(item=>[item.person.id,item]));data.items.forEach(item=>known.set(item.person.id,item));conversations=[...known.values()];inboxCursor=data.nextCursor;}
+      loadedVersion=inboxVersion;updateSummary(data.summary);renderInbox();status.textContent='';
     }catch(error){if(error.name!=='AbortError'&&token===generation)status.textContent=error.message;}
-    finally{if(token===generation){request=null;more.disabled=false;}}
+    finally{if(token===generation){request=null;more.disabled=false;list.setAttribute('aria-busy','false');}}
   }
   async function loadConversation(append=false,initial=false){
-    if(!person)return;resetRequest();request=new AbortController();const token=generation,target=person.id,account=owner;
-    if(initial||append)status.textContent='Carregando…';older.disabled=true;
+    if(!person)return;resetRequest();request=new AbortController();const token=generation,target=person.id,account=owner,existing=new Set(items.map(item=>item.id));
+    if((initial&&!items.length)||append)status.textContent='Carregando…';older.disabled=true;thread.setAttribute('aria-busy',String(initial&&!items.length));
     try{
-      const data=await api('/api/messages?'+new URLSearchParams({user:target,...(append&&cursor?{cursor}:{})}),{signal:request.signal});
+      const data=append?await api('/api/messages?'+new URLSearchParams({user:target,cursor}),{signal:request.signal}):await fetchConversation(target);
       if(token!==generation||account!==self()||person?.id!==target||!dialog.open)return;
       person=data.person;
       renderHeader(person);
-      const known=new Map((initial?[]:items).map(item=>[item.id,item]));data.items.forEach(item=>known.set(item.id,item));
+      const kept=initial?items.filter(item=>item.senderId===account&&!existing.has(item.id)):items;
+      const known=new Map(kept.map(item=>[item.id,item]));data.items.forEach(item=>known.set(item.id,item));
       items=[...known.values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
       if(append||initial||items.length<=50)cursor=data.nextCursor;
       if(!append)loadedVersion=data.summary.version;
       updateSummary(data.summary);renderMessages(initial,append);status.textContent='';updatePending();
     }catch(error){if(error.name!=='AbortError'&&token===generation)status.textContent=error.message;}
-    finally{if(token===generation){request=null;older.disabled=false;}}
+    finally{if(token===generation){request=null;older.disabled=false;thread.setAttribute('aria-busy','false');}}
   }
   function showInbox(){
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();person=null;items=[];cursor=null;observer.disconnect();visible.clear();
-    inbox.hidden=false;chat.hidden=true;back.hidden=true;loadedVersion=-1;renderHeader();
+    inbox.hidden=false;chat.hidden=true;back.hidden=true;loadedVersion=inboxVersion;renderHeader();
+    if(inboxLoaded)renderInbox();else{list.innerHTML=loadingContent();more.hidden=true;}
     search.value='';results.hidden=true;searchRequest?.abort();void loadInbox();
   }
   async function start(target){
     if(target===self())return;
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();searchRequest?.abort();
-    person=conversations.find(item=>item.person.id===target)?.person||{id:target,handle:'',displayName:'',photo:''};
-    items=[];cursor=null;loadedVersion=-1;observer.disconnect();visible.clear();thread.replaceChildren();
+    const saved=conversationCache.get(target),cached=saved&&Date.now()-saved.savedAt<300000?saved:null;
+    person=cached?.person||conversations.find(item=>item.person.id===target)?.person||{id:target,handle:'',displayName:'',photo:''};
+    // Reauthorize shared links before showing their content again; direct messages stay in this conversation.
+    items=cached?cached.items.map(item=>item.kind==='post'?{...item,post:null,loading:true}:item):[];
+    cursor=cached?.nextCursor||null;loadedVersion=cached?.summary.version??-1;observer.disconnect();visible.clear();thread.replaceChildren();
     inbox.hidden=true;chat.hidden=false;back.hidden=false;older.hidden=true;renderHeader(person);
     input.value=drafts.get(target)||'';submission=null;
     if(!dialog.open)dialog.showModal();resizeInput();updatePending();
+    if(cached)renderMessages(true);else thread.innerHTML=loadingContent();
     await loadConversation(false,true);
     if(person?.id===target){renderHeader(person);$('#message-compose').setAttribute('aria-label','Criar Ressoa para @'+person.handle);}
   }
@@ -135,6 +174,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
       const data=await api('/api/messages/read',{method:'POST',body:{user:target,ids}});
       if(account!==self())return;updateSummary(data.summary);
       if(person?.id===target)items.forEach(item=>{if(ids.includes(item.id))item.readAt=new Date().toISOString();});
+      const cached=conversationCache.get(target);cached?.items.forEach(item=>{if(ids.includes(item.id))item.readAt=new Date().toISOString();});
+      inboxVersion=-1;
     }catch{}finally{reading=false;}
   }
   async function sendPayload(body,target=person?.id){
@@ -142,6 +183,14 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     const data=await api('/api/messages',{method:'POST',body:{...body,user:target}});
     if(account!==self())return data;
     updateSummary(data.summary);
+    const cached=conversationCache.get(target);
+    if(cached){if(!cached.items.some(item=>item.id===data.message.id))cached.items.push(data.message);cached.summary=data.summary;}
+    const recipient=person?.id===target?person:cached?.person||conversations.find(item=>item.person.id===target)?.person;
+    if(recipient?.handle){
+      const previous=conversations.find(item=>item.person.id===target);
+      conversations=[{person:recipient,updatedAt:data.message.createdAt,unreadCount:previous?.unreadCount||0,preview:data.message.kind==='text'?data.message.text.slice(0,120):'Enviou um Ressoa',sentByMe:true},...conversations.filter(item=>item.person.id!==target)];
+    }
+    inboxVersion=-1;
     if(person?.id===target&&dialog.open){
       if(!items.some(item=>item.id===data.message.id))items.push(data.message);
       renderMessages(true);
@@ -190,13 +239,24 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     if(document.hidden||polling||request||(!force&&!dialog.open&&Date.now()-lastPoll<8000))return;
     polling=true;lastPoll=Date.now();const account=owner;
     try{
+      if(force&&dialog.open){if(person)await loadConversation();else await loadInbox();return;}
+      if(!inboxLoaded&&!dialog.open){await fetchInbox();return;}
       const data=await api('/api/messages/summary');if(account!==self())return;updateSummary(data.summary);
       if(dialog.open&&(loadedVersion!==summary.version||force)){if(person)await loadConversation();else await loadInbox();}
+      else if(!dialog.open&&inboxVersion!==summary.version)await fetchInbox();
     }catch{}finally{polling=false;}
   }
   window.addEventListener('accountchange',()=>{
-    if(owner!==self()){owner=self();summary={version:-1,unreadCount:0};if(dialog.open)dialog.close();person=null;items=[];conversations=[];drafts.clear();pendingPost=null;submission=null;updateSummary(summary);}
+    if(owner!==self()){owner=self();clearMemory();}
   });
+  function clearMemory(){
+    cacheEpoch++;
+    inboxJob?.controller.abort();inboxJob=null;if(dialog.open)dialog.close();resetRequest();
+    conversationJobs.forEach(job=>job.controller.abort());conversationJobs.clear();
+    person=null;items=[];conversations=[];conversationCache.clear();drafts.clear();thread.replaceChildren();list.replaceChildren();
+    inboxLoaded=false;inboxVersion=-1;loadedVersion=-1;pendingPost=null;submission=null;summary={version:-1,unreadCount:0};updateSummary(summary);
+  }
+  window.addEventListener('sessionexpired',clearMemory);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){void poll(true);void readVisible();}});
   document.addEventListener('close',()=>{if(dialog.open)setTimeout(readVisible,0);},true);
   setInterval(poll,4000);void poll(true);

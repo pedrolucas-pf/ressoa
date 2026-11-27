@@ -93,7 +93,7 @@ class PostgresConnection:
         try:
             with self._connection.pipeline():
                 cursors = [self.execute(statement, parameters) for statement, parameters in queries]
-            return [cursor.fetchall() for cursor in cursors]
+            return [cursor.fetchall() if cursor.description is not None else [] for cursor in cursors]
         except self._driver.Error as error:
             raise RuntimeError(f'Falha de consulta PostgreSQL (SQLSTATE {error.sqlstate or "unknown"}).') from None
 
