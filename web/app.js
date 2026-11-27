@@ -46,6 +46,7 @@ let composerRecipient=null,composerMessageId=null;
 const directDrafts=new Map();
 let social = readAccount('ressoa.social', {}), feedGeneratedAt = Date.now();
 let publicPosts = readAccount('ressoa.public', []);
+let profileBlocked=false;
 let visitedId=null,visitedProfile=null,profileError='',profileRequest=null,profileGeneration=0,loadingMore=false;
 let linkedPost=null,linkedId=null,linkRequest=null,linkGeneration=0;
 
@@ -852,7 +853,9 @@ function renderProfile() {
  const own=!visitedId,info=own?profileInfo:visitedProfile?.profile;
  const relationOwner=own?getAccount().user.id:visitedId;
  const canRelations=own||visitedProfile?.canViewRelations===true;
- $('#profile-options').innerHTML=info&&canRelations?`<details class="profile-menu options-menu"><summary class="icon-button" aria-label="Opções do perfil" title="Opções do perfil">${icons.more}</summary><div class="profile-menu-panel options-menu-panel" role="group" aria-label="Conexões do perfil"><button type="button" data-followers-list="${escape(relationOwner)}">Seguidores</button><button type="button" data-following-list="${escape(relationOwner)}">Seguindo</button></div></details>`:'';
+ const relationButtons=info&&canRelations?'<button type="button" data-followers-list="'+escape(relationOwner)+'">Seguidores</button><button type="button" data-following-list="'+escape(relationOwner)+'">Seguindo</button>':'';
+ const blockButtons=own?'<button type="button" data-blocked-list>Pessoas bloqueadas</button>':'<button type="button" '+(profileBlocked?'data-unblock-person':'data-block-person')+'="'+escape(visitedId)+'">'+(profileBlocked?'Desbloquear':'Bloquear pessoa')+'</button>';
+ $('#profile-options').innerHTML='<details class="profile-menu options-menu"><summary class="icon-button" aria-label="Opções do perfil" title="Opções do perfil">'+icons.more+'</summary><div class="profile-menu-panel options-menu-panel" role="group" aria-label="Opções do perfil">'+relationButtons+blockButtons+'</div></details>';
  $('#edit-profile').hidden=!own;$('#logout').hidden=!own;$('#back-my-profile').hidden=own;
  $('#profile-label').textContent=own?'Meu perfil':'Perfil';
  if(!info){
@@ -878,12 +881,12 @@ function renderProfile() {
 async function loadVisitedProfile() {
  if(!visitedId||(profileRequest&&!profileRequest.signal.aborted))return;
  const id=visitedId,token=++profileGeneration;
- profileRequest=new AbortController();profileError='';loadingMore=false;renderProfile();
+ profileRequest=new AbortController();profileError='';profileBlocked=false;loadingMore=false;renderProfile();
  try {
   const data=await api(`/api/profile?${new URLSearchParams({user:id})}`,{signal:profileRequest.signal});
   if(token!==profileGeneration||visitedId!==id)return;
   visitedProfile=hydratePublicProfile(data);renderProfile();
- }catch(error){if(error.name!=='AbortError'&&token===profileGeneration){profileError=error.status===404?'Esse perfil não foi encontrado.':'Não foi possível carregar o perfil. Tente novamente.';visitedProfile=null;renderProfile();}}
+ }catch(error){if(error.name!=='AbortError'&&token===profileGeneration){profileBlocked=error.code==='blocked_by_me';profileError=profileBlocked?'Você bloqueou esse perfil.':error.status===404?'Perfil indisponível.':'Não foi possível carregar o perfil. Tente novamente.';visitedProfile=null;renderProfile();}}
  finally{if(token===profileGeneration)profileRequest=null;}
 }
 async function loadMoreProfile(kind) {
@@ -1058,8 +1061,8 @@ const showFollowers=target=>showRelations('followers',target);
 function peopleIdentity(person) {
  return `<a class="person-link person-identity" href="${escape(personHref(person.id))}" data-person="${escape(person.id)}">${profileAvatar(person.photo,person.displayName)}<span>${escape(person.displayName)}<small>@${escape(person.handle)}</small></span></a>`;
 }
-const comments=createComments({identity:peopleIdentity,toast,stopPreview});
-const messages=createMessages({toast,stopPreview,onCompose:person=>openComposer(null,person),onPlay:toggleCoverPlayer,onOpenPost:id=>{location.hash='#ressoa/'+encodeURIComponent(id);}});
+const comments=createComments({identity:peopleIdentity,toast,stopPreview,onConfirm:askDelete});
+const messages=createMessages({toast,stopPreview,onConfirm:askDelete,onBlock:id=>setBlock(id,true),onCompose:person=>openComposer(null,person),onPlay:toggleCoverPlayer,onOpenPost:id=>{location.hash='#ressoa/'+encodeURIComponent(id);}});
 document.addEventListener('click',event=>{
  const person=event.target.closest('[data-message-user]');if(person)void messages.open(person.dataset.messageUser);
  const post=event.target.closest('[data-message-post]');if(post){$('#reader').close();messages.share(post.dataset.messagePost);}
@@ -1071,6 +1074,29 @@ const notifications=createNotifications({
  onResponse:()=>{if(page==='perfil'&&!visitedId)renderProfile();},
  onFollowChange:()=>{if(page==='perfil'&&visitedId)void loadVisitedProfile();else void refreshView();},
  followButton:person=>`<button type="button" class="button" data-follow-back data-follow="${escape(person.id)}" data-private="${Boolean(person.isPrivate)}" ${pendingAttributes('follow',person.id)} aria-pressed="${hasFollow(person.id)}">${hasFollow(person.id)?followLabel(person.id,person.isPrivate):'Seguir de volta'}</button>`
+});
+async function showBlocked(){
+ $('#blocked-content').textContent='Carregando…';$('#blocked-dialog').showModal();
+ try{const {people}=await api('/api/blocks');$('#blocked-content').innerHTML=people.length?people.map(person=>'<div class="person-row">'+peopleIdentity(person)+'<button type="button" class="text-button" data-unblock-person="'+escape(person.id)+'">Desbloquear</button></div>').join(''):'<p class="empty">Nenhuma pessoa bloqueada.</p>';}
+ catch(error){$('#blocked-content').textContent=error.message;}
+}
+function setBlock(id,active){
+ askDelete(active?'Bloquear pessoa?':'Desbloquear pessoa?',active?'Vocês não poderão ver o conteúdo um do outro nem trocar mensagens. As conexões de seguir serão removidas.':'O acesso volta a respeitar a visibilidade dos perfis. Você pode seguir a pessoa novamente.',async()=>{
+  try{
+   await api('/api/blocks',{method:'PUT',body:{user:id,active}});
+   document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());stopPreview();sharePost=null;readerId=null;$('#reader-content').replaceChildren();
+   visitedProfile=null;profileRequest?.abort();profileGeneration++;profileError='';profileBlocked=active&&visitedId===id;
+   $('#people-query').value='';$('#people-query').dispatchEvent(new Event('input',{bubbles:true}));
+   window.dispatchEvent(new Event('privacychange'));await refreshAccount();
+   if(visitedId)await loadVisitedProfile();else renderProfile();
+   toast(active?'Pessoa bloqueada.':'Pessoa desbloqueada.');
+  }catch(error){toast(error.message);}
+ },active?'Bloquear':'Desbloquear');
+}
+document.addEventListener('click',event=>{
+ const block=event.target.closest('[data-block-person],[data-unblock-person]');
+ if(block){setBlock(block.dataset.blockPerson||block.dataset.unblockPerson,block.hasAttribute('data-block-person'));return;}
+ if(event.target.closest('[data-blocked-list]'))void showBlocked();
 });
 function askDelete(title,message,action,label='Apagar') {
  confirmAction=action;$('#confirm-title').textContent=title;$('#confirm-message').textContent=message;$('#confirm-action').textContent=label;$('#confirm-dialog').showModal();

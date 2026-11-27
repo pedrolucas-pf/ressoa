@@ -234,6 +234,12 @@ class Application:
             self.db.limit('feed-read:'+user_id,60,60)
             return 200, self.db.bootstrap(user_id,feed_options=data), []
         if path.startswith('/api/messages'):
+            if path == '/api/messages' and method == 'DELETE':
+                self.db.limit('messages-delete:'+user_id,90,60)
+                return 200,self.messages.delete(user_id,data),[]
+            if path == '/api/messages/conversation' and method == 'DELETE':
+                self.db.limit('messages-clear:'+user_id,30,60)
+                return 200,self.messages.clear(user_id,data),[]
             if method == 'GET':
                 self.db.limit('messages-read:'+user_id,120,60)
                 if path == '/api/messages/summary':
@@ -256,6 +262,9 @@ class Application:
         if path == '/api/people' and method == 'GET':
             self.db.limit('people-search:'+user_id,90,60)
             return 200, {'people':self.db.search_people(user_id,value('q'))}, []
+        if path == '/api/blocks' and method in ('GET','PUT'):
+            self.db.limit('blocks:'+user_id,60,60)
+            return 200,({'people':self.db.blocked_people(user_id)} if method=='GET' else self.db.block(user_id,data)),[]
         if path == '/api/profile' and method == 'GET':
             self.db.limit('profile-read:'+user_id,90,60)
             return 200, self.db.public_profile(user_id,value('user'),int(value('offset','0')),int(value('repostOffset','0'))), []
@@ -293,7 +302,10 @@ class Application:
             return 200,self.db.notifications(user_id,value('cursor'),value('summary')=='1'),[]
         if path == '/api/comments' and method == 'GET':
             self.db.limit('comments-read:'+user_id,120,60)
-            return 200,self.db.comments(user_id,value('post'),value('cursor')),[]
+            return 200,self.db.comments(user_id,value('post'),value('cursor'),value('parent')),[]
+        if path == '/api/comments/like' and method == 'PUT':
+            self.db.limit('comments-like:'+user_id,90,60)
+            return 200,self.db.like_comment(user_id,data),[]
         if path == '/api/comments' and method in ('POST','DELETE'):
             self.db.limit('comments-write:'+user_id,30,60)
             return 200,(self.db.add_comment(user_id,data) if method=='POST' else self.db.delete_comment(user_id,data)),[]

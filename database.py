@@ -176,8 +176,25 @@ CREATE TABLE IF NOT EXISTS interaction_notifications (
 CREATE INDEX IF NOT EXISTS interaction_notifications_recent ON interaction_notifications(user_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS comments (
  id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
- author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL
+ author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL,
+ parent_id TEXT REFERENCES comments(id) ON DELETE CASCADE, reply_to_id TEXT REFERENCES comments(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS comment_likes (
+ comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL, PRIMARY KEY(comment_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS comment_like_notifications (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL, read_at TEXT, PRIMARY KEY(comment_id,actor_id)
+);
+CREATE INDEX IF NOT EXISTS comment_like_notifications_recent ON comment_like_notifications(user_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS comment_reply_notifications (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL, read_at TEXT, PRIMARY KEY(user_id,comment_id)
+);
+CREATE INDEX IF NOT EXISTS comment_reply_notifications_recent ON comment_reply_notifications(user_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id,created_at,id);
 CREATE TABLE IF NOT EXISTS comment_notifications (
  comment_id TEXT PRIMARY KEY REFERENCES comments(id) ON DELETE CASCADE,
@@ -214,9 +231,24 @@ CREATE TABLE IF NOT EXISTS dm_messages (
  sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  kind TEXT NOT NULL CHECK(kind IN ('text','ressoa','post')), text TEXT NOT NULL DEFAULT '',
  payload TEXT NOT NULL DEFAULT '{}', post_id TEXT REFERENCES posts(id) ON DELETE SET NULL,
- created_at TEXT NOT NULL, read_at TEXT
+ created_at TEXT NOT NULL, read_at TEXT, deleted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS dm_messages_thread ON dm_messages(thread_id,created_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS dm_hidden_messages (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ message_id TEXT NOT NULL REFERENCES dm_messages(id) ON DELETE CASCADE, PRIMARY KEY(user_id,message_id)
+);
+CREATE TABLE IF NOT EXISTS dm_thread_clears (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ thread_id TEXT NOT NULL REFERENCES dm_threads(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(user_id,thread_id)
+);
+CREATE TABLE IF NOT EXISTS blocks (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ target_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL,
+ PRIMARY KEY(user_id,target_id), CHECK(user_id<>target_id)
+);
+CREATE INDEX IF NOT EXISTS blocks_target ON blocks(target_id,user_id);
 CREATE INDEX IF NOT EXISTS dm_messages_unread ON dm_messages(thread_id,sender_id) WHERE read_at IS NULL;
 CREATE INDEX IF NOT EXISTS dm_messages_post ON dm_messages(post_id) WHERE post_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS dm_reactions (
@@ -237,7 +269,7 @@ CREATE INDEX IF NOT EXISTS dm_reaction_notifications_conversation ON dm_reaction
 CREATE INDEX IF NOT EXISTS dm_reaction_notifications_unread ON dm_reaction_notifications(user_id,actor_id) WHERE read_at IS NULL;
 CREATE INDEX IF NOT EXISTS dm_threads_a ON dm_threads(user_a);
 CREATE INDEX IF NOT EXISTS dm_threads_b ON dm_threads(user_b);
-PRAGMA user_version = 14;
+PRAGMA user_version = 15;
 """
 
 
@@ -275,6 +307,10 @@ class Database:
             for table,column,definition in (('users','messages_version','INTEGER NOT NULL DEFAULT 0'),('posts','mentions',"TEXT NOT NULL DEFAULT '[]'")):
                 if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            for table,column,definition in (('comments','parent_id','TEXT REFERENCES comments(id) ON DELETE CASCADE'),('comments','reply_to_id','TEXT REFERENCES comments(id) ON DELETE SET NULL'),('dm_messages','deleted_at','TEXT')):
+                if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}:
+                    db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            db.execute('CREATE INDEX IF NOT EXISTS comments_parent ON comments(post_id,parent_id,created_at,id)')
             self._migrate_username_case(db)
 
     @staticmethod
@@ -334,13 +370,50 @@ class Database:
 
     @staticmethod
     def can_view_profile(db,viewer_id,target_id):
+        if Database.is_blocked(db,viewer_id,target_id):return False
         if viewer_id==target_id:return True
         return bool(db.execute('SELECT 1 FROM users u WHERE u.id=? AND (u.is_private=0 OR EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=u.id))',(target_id,viewer_id)).fetchone())
 
     @staticmethod
     def visible_author_sql(viewer_id):
         # All queries using this condition alias posts as p and their owner as u.
-        return '(u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows access WHERE access.user_id=? AND access.target_id=p.owner_id))',(viewer_id,viewer_id)
+        return '''(u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows access WHERE access.user_id=? AND access.target_id=p.owner_id))
+            AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=p.owner_id) OR (b.target_id=? AND b.user_id=p.owner_id))''',(viewer_id,viewer_id,viewer_id,viewer_id)
+
+    @staticmethod
+    def blocked_ids(db,user_id):
+        cache=getattr(db,'_block_cache',{})
+        if user_id not in cache:
+            rows=db.execute('SELECT user_id,target_id FROM blocks WHERE user_id=? OR target_id=?',(user_id,user_id)).fetchall()
+            cache[user_id]={row['target_id'] if row['user_id']==user_id else row['user_id'] for row in rows}
+            db._block_cache=cache
+        return cache[user_id]
+
+    @staticmethod
+    def is_blocked(db,user_id,target_id):
+        return target_id in Database.blocked_ids(db,user_id)
+
+    def blocked_people(self,user_id):
+        with self.connect() as db:
+            return [self.person(row) for row in db.execute('SELECT u.id,u.display_name,u.username,u.photo FROM blocks b JOIN users u ON u.id=b.target_id WHERE b.user_id=? ORDER BY b.created_at DESC',(user_id,)).fetchall()]
+
+    def block(self,user_id,data):
+        target=text(data.get('user'),1,100);active=data.get('active')
+        if type(active) is not bool or target==user_id:raise APIError(400,'Pessoa inválida.')
+        with self.transaction() as db:
+            if not db.execute('SELECT 1 FROM users WHERE id=?',(target,)).fetchone():raise APIError(404,'Pessoa não encontrada.')
+            if active:
+                db.execute('INSERT INTO blocks VALUES (?,?,?) ON CONFLICT DO NOTHING',(user_id,target,now_iso()))
+                for table,one,two in (('follows','user_id','target_id'),('follow_requests','user_id','target_id')):
+                    db.execute(f'DELETE FROM {table} WHERE ({one}=? AND {two}=?) OR ({one}=? AND {two}=?)',(user_id,target,target,user_id))
+                for table in ('follow_notifications','interaction_notifications','comment_notifications','mention_notifications','comment_like_notifications','comment_reply_notifications'):
+                    db.execute(f'DELETE FROM {table} WHERE (user_id=? AND actor_id=?) OR (user_id=? AND actor_id=?)',(user_id,target,target,user_id))
+                    if table!='follow_notifications':
+                        db.execute(f'DELETE FROM {table} WHERE (user_id=? AND post_id IN (SELECT id FROM posts WHERE owner_id=?)) OR (user_id=? AND post_id IN (SELECT id FROM posts WHERE owner_id=?))',(user_id,target,target,user_id))
+            else:db.execute('DELETE FROM blocks WHERE user_id=? AND target_id=?',(user_id,target))
+            db.execute('UPDATE users SET notifications_version=notifications_version+1,messages_version=messages_version+1 WHERE id IN (?,?)',(user_id,target))
+            db._block_cache={}
+        return dict(ok=True)
 
     @contextmanager
     def request_scope(self):
@@ -544,7 +617,8 @@ class Database:
                               WHEN search_key(display_name) LIKE ? ESCAPE '\' THEN 2 ELSE 3 END,
                     EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=users.id) DESC,username LIMIT 20""",
                 ('%'+literal+'%','%'+literal+'%',normalized,literal+'%',literal+'%',viewer_id)).fetchall()
-            return [self.person(row) for row in rows]
+            blocked=self.blocked_ids(db,viewer_id)
+            return [self.person(row) for row in rows if row['id'] not in blocked]
 
     def public_profile(self, viewer_id, target_id, offset=0, repost_offset=0):
         if not isinstance(target_id,str) or len(target_id)>100:
@@ -553,6 +627,9 @@ class Database:
             raise APIError(400,'Página inválida.')
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
+            if self.is_blocked(db,viewer_id,target_id):
+                own=db.execute('SELECT 1 FROM blocks WHERE user_id=? AND target_id=?',(viewer_id,target_id)).fetchone()
+                raise APIError(404,'Você bloqueou esse perfil.' if own else 'Perfil indisponível.','blocked_by_me' if own else 'profile_unavailable')
             user=db.execute('SELECT id,display_name,username,bio,photo,favorites,pinned,background,background_layout,is_private FROM users WHERE id=?',(target_id,)).fetchone()
             if not user:
                 raise APIError(404,'Esse perfil não foi encontrado.')
@@ -655,8 +732,9 @@ class Database:
             EXISTS(SELECT 1 FROM weekly w WHERE w.post_id=p.id AND w.week_key=? AND w.deleted_at IS NULL) AS active_week
             FROM posts p JOIN users u ON u.id=p.owner_id JOIN tracks t ON t.id=p.track_id
             WHERE p.id IN ({marks}) AND (p.owner_id=? OR p.visibility='public') AND
-                (u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id)){visibility}''',
-            (current_week(),*post_ids,user_id,user_id,user_id))
+                (u.is_private=0 OR p.owner_id=? OR EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=p.owner_id))
+                AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=p.owner_id) OR (b.target_id=? AND b.user_id=p.owner_id)){visibility}''',
+            (current_week(),*post_ids,user_id,user_id,user_id,user_id,user_id))
 
     @staticmethod
     def cache_accessible(db, row):
@@ -720,8 +798,10 @@ class Database:
                 ('''SELECT users.*,(SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
                     (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
                     +(SELECT COUNT(*) FROM comment_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
+                    +(SELECT COUNT(*) FROM comment_like_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
+                    +(SELECT COUNT(*) FROM comment_reply_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
                     +(SELECT COUNT(*) FROM mention_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>? AND '''+self.mention_access_sql()+''') AS unread_interactions
-                    FROM users WHERE id=?''', (self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),user_id)),
+                    FROM users WHERE id=?''', (self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),self.notification_cutoff(),user_id)),
                 ("SELECT * FROM posts WHERE owner_id=? AND kind='entry' ORDER BY created_at DESC", (user_id,)),
                 (f"""SELECT p.* FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.visibility='public' AND p.owner_id<>? AND {access}
                 AND (p.kind='weekly' OR {recent})
@@ -918,6 +998,7 @@ class Database:
                 person=db.execute('SELECT is_private FROM users WHERE id=?',(target,)).fetchone()
                 if target == user_id or not person:
                     raise APIError(404, 'Pessoa não encontrada.')
+                if self.is_blocked(db,user_id,target):raise APIError(403,'Não é possível seguir esse perfil.')
                 if active:
                     already=db.execute('SELECT 1 FROM follows WHERE user_id=? AND target_id=?',(user_id,target)).fetchone()
                     if person['is_private'] and not already:
@@ -1012,15 +1093,17 @@ class Database:
             (SELECT COUNT(*) FROM follow_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?) AS unread_followers,
             (SELECT COUNT(*) FROM interaction_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
             +(SELECT COUNT(*) FROM comment_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
+            +(SELECT COUNT(*) FROM comment_like_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
+            +(SELECT COUNT(*) FROM comment_reply_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>?)
             +(SELECT COUNT(*) FROM mention_notifications n WHERE n.user_id=users.id AND n.read_at IS NULL AND n.created_at>? AND '''+cls.mention_access_sql()+''') AS unread_interactions,
-            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(cls.notification_cutoff(),cls.notification_cutoff(),cls.notification_cutoff(),cls.notification_cutoff(),user_id,))
+            (SELECT COUNT(*) FROM follow_requests r WHERE r.target_id=users.id) AS request_count FROM users WHERE id=?''',(cls.notification_cutoff(),cls.notification_cutoff(),cls.notification_cutoff(),cls.notification_cutoff(),cls.notification_cutoff(),cls.notification_cutoff(),user_id,))
 
     @staticmethod
     def notification_summary(row):
         return dict(version=row['version'],unreadFollowers=row['unread_followers'],unreadInteractions=row['unread_interactions'],requestCount=row['request_count'],unreadCount=row['unread_followers']+row['unread_interactions']+row['request_count'])
 
     def notifications(self,user_id,cursor='',summary_only=False):
-        parameters=[user_id,user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff()]
+        parameters=[user_id,user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff(),user_id,self.notification_cutoff()]
         restriction=''
         if cursor:
             try:
@@ -1029,7 +1112,7 @@ class Database:
                 if not isinstance(values,list) or len(values) not in (3,4,5) or any(not isinstance(item,str) for item in values):raise ValueError()
                 values+=['']*(5-len(values))
                 stamp,kind,actor,post_id,comment_id=values
-                if len(stamp)>50 or kind not in ('follow','request','like','repost','comment','mention') or not 1<=len(actor)<=100 or len(post_id)>100 or len(comment_id)>100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
+                if len(stamp)>50 or kind not in ('follow','request','like','repost','comment','mention','comment_like','reply') or not 1<=len(actor)<=100 or len(post_id)>100 or len(comment_id)>100 or not datetime.fromisoformat(stamp).tzinfo:raise ValueError()
             except (ValueError,UnicodeError,TypeError):
                 raise APIError(400,'A lista mudou. Reabra as notificações.') from None
             restriction='WHERE (i.created_at,i.kind,i.actor_id,i.post_id,i.event_id)<(?,?,?,?,?)'
@@ -1043,6 +1126,8 @@ class Database:
                     UNION ALL SELECT 'follow',actor_id,created_at,read_at,'','' FROM follow_notifications WHERE user_id=? AND created_at>?
                     UNION ALL SELECT kind,actor_id,created_at,read_at,post_id,'' FROM interaction_notifications WHERE user_id=? AND created_at>?
                     UNION ALL SELECT 'comment',actor_id,created_at,read_at,post_id,comment_id FROM comment_notifications WHERE user_id=? AND created_at>?
+                    UNION ALL SELECT 'comment_like',actor_id,created_at,read_at,post_id,comment_id FROM comment_like_notifications WHERE user_id=? AND created_at>?
+                    UNION ALL SELECT 'reply',actor_id,created_at,read_at,post_id,comment_id FROM comment_reply_notifications WHERE user_id=? AND created_at>?
                     UNION ALL SELECT 'mention',actor_id,created_at,read_at,post_id,'' FROM mention_notifications n WHERE user_id=? AND created_at>? AND {self.mention_access_sql()})
                     SELECT i.kind,i.created_at,i.read_at,i.post_id,i.event_id,u.id,u.display_name,u.username,u.photo,u.is_private,t.data AS track_data
                     FROM items i JOIN users u ON u.id=i.actor_id LEFT JOIN posts p ON p.id=i.post_id LEFT JOIN tracks t ON t.id=p.track_id {restriction}
@@ -1062,7 +1147,7 @@ class Database:
     def read_notifications(self,user_id,data):
         items=data.get('items')
         if not isinstance(items,list) or len(items)>50:raise APIError(400,'Notificações inválidas.')
-        keys=[];interactions=[];comments=[];mentions=[]
+        keys=[];interactions=[];comments=[];mentions=[];comment_likes=[];replies=[]
         for item in items:
             if not isinstance(item,dict):raise APIError(400,'Notificações inválidas.')
             actor,stamp=text(item.get('actorId'),1,100),text(item.get('createdAt'),1,50)
@@ -1071,8 +1156,10 @@ class Database:
             elif kind in ('like','repost'):interactions.extend((actor,stamp,kind,text(item.get('postId'),1,100)))
             elif kind=='comment':comments.extend((actor,stamp,text(item.get('postId'),1,100),text(item.get('commentId'),1,100)))
             elif kind=='mention':mentions.extend((actor,stamp,text(item.get('postId'),1,100)))
+            elif kind=='comment_like':comment_likes.extend((actor,stamp,text(item.get('postId'),1,100),text(item.get('commentId'),1,100)))
+            elif kind=='reply':replies.extend((actor,stamp,text(item.get('postId'),1,100),text(item.get('commentId'),1,100)))
             else:raise APIError(400,'Notificação inválida.')
-        if keys or interactions or comments or mentions:
+        if keys or interactions or comments or mentions or comment_likes or replies:
             with self.transaction() as db:
                 changed=[]
                 if keys:
@@ -1091,6 +1178,10 @@ class Database:
                     values=','.join('(?,?,?)' for _ in range(len(mentions)//3))
                     changed+=db.execute(f'''UPDATE mention_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL
                         AND (actor_id,created_at,post_id) IN (VALUES {values}) RETURNING actor_id''',(now_iso(),user_id,*mentions)).fetchall()
+                for table,values_list in (('comment_like_notifications',comment_likes),('comment_reply_notifications',replies)):
+                    if values_list:
+                        marks=','.join('(?,?,?,?)' for _ in range(len(values_list)//4))
+                        changed+=db.execute(f'UPDATE {table} SET read_at=? WHERE user_id=? AND read_at IS NULL AND (actor_id,created_at,post_id,comment_id) IN (VALUES {marks}) RETURNING actor_id',(now_iso(),user_id,*values_list)).fetchall()
                 if changed:self.bump_notifications(db,user_id)
         return self.notifications(user_id,summary_only=True)
 
@@ -1098,10 +1189,13 @@ class Database:
         actor=text(data.get('actorId'),1,100)
         timestamp=text(data.get('createdAt'),1,50)
         kind=data.get('kind','follow')
-        if kind not in ('follow','like','repost','comment','mention'):raise APIError(400,'Notificação inválida.')
+        if kind not in ('follow','like','repost','comment','mention','comment_like','reply'):raise APIError(400,'Notificação inválida.')
         with self.transaction() as db:
             if kind=='follow':removed=db.execute('DELETE FROM follow_notifications WHERE user_id=? AND actor_id=? AND created_at=? RETURNING actor_id',(user_id,actor,timestamp)).fetchone()
             elif kind=='comment':removed=db.execute('DELETE FROM comment_notifications WHERE user_id=? AND actor_id=? AND created_at=? AND post_id=? AND comment_id=? RETURNING actor_id',(user_id,actor,timestamp,text(data.get('postId'),1,100),text(data.get('commentId'),1,100))).fetchone()
+            elif kind in ('comment_like','reply'):
+                table='comment_like_notifications' if kind=='comment_like' else 'comment_reply_notifications'
+                removed=db.execute(f'DELETE FROM {table} WHERE user_id=? AND actor_id=? AND created_at=? AND post_id=? AND comment_id=? RETURNING actor_id',(user_id,actor,timestamp,text(data.get('postId'),1,100),text(data.get('commentId'),1,100))).fetchone()
             elif kind=='mention':removed=db.execute('DELETE FROM mention_notifications WHERE user_id=? AND actor_id=? AND created_at=? AND post_id=? RETURNING actor_id',(user_id,actor,timestamp,text(data.get('postId'),1,100))).fetchone()
             else:removed=db.execute('DELETE FROM interaction_notifications WHERE user_id=? AND actor_id=? AND created_at=? AND kind=? AND post_id=? RETURNING actor_id',(user_id,actor,timestamp,kind,text(data.get('postId'),1,100))).fetchone()
             if removed:
@@ -1118,53 +1212,102 @@ class Database:
                 CASE WHEN EXISTS(SELECT 1 FROM follows f WHERE f.user_id=? AND f.target_id=u.id) THEN 'following'
                 WHEN EXISTS(SELECT 1 FROM follow_requests r WHERE r.user_id=? AND r.target_id=u.id) THEN 'requested'
                 ELSE 'none' END AS status FROM users u WHERE u.id IN ({placeholders})''',(user_id,user_id,*targets)).fetchall()
-            people={row['id']:dict(person=self.person(row),status=row['status']) for row in rows}
+            blocked=self.blocked_ids(db,user_id)
+            people={row['id']:dict(person=self.person(row),status=row['status']) for row in rows if row['id'] not in blocked}
             return dict(people=[people.get(target,dict(person=dict(id=target),status='none')) for target in targets])
 
-    def comments(self,user_id,post_id,cursor=''):
-        post_id=text(post_id,1,100)
-        params=[post_id];restriction=''
+    @staticmethod
+    def comment_query():
+        return '''SELECT c.*,u.display_name,u.username,u.photo,ru.username AS reply_handle,ru.id AS reply_author_id,
+            (SELECT COUNT(*) FROM comment_likes l WHERE l.comment_id=c.id) AS like_count,
+            EXISTS(SELECT 1 FROM comment_likes l WHERE l.comment_id=c.id AND l.user_id=?) AS liked,
+            (SELECT COUNT(*) FROM comments r WHERE r.parent_id=c.id) AS reply_count
+            FROM comments c JOIN users u ON u.id=c.author_id
+            LEFT JOIN comments rc ON rc.id=c.reply_to_id LEFT JOIN users ru ON ru.id=rc.author_id'''
+
+    def comments(self,user_id,post_id,cursor='',parent=''):
+        post_id=text(post_id,1,100);params=[user_id,post_id];restriction=''
         if cursor:
             try:
-                if not isinstance(cursor,str) or len(cursor)>500 or not re.fullmatch(r'[A-Za-z0-9_-]+',cursor):raise ValueError()
+                if not isinstance(cursor,str) or len(cursor)>500:raise ValueError()
                 values=json.loads(base64.urlsafe_b64decode(cursor+'='*(-len(cursor)%4)).decode())
                 if not isinstance(values,list) or len(values)!=2:raise ValueError()
                 stamp,identifier=values
                 if not isinstance(stamp,str) or len(stamp)>50 or not datetime.fromisoformat(stamp).tzinfo or not isinstance(identifier,str) or not 1<=len(identifier)<=100:raise ValueError()
             except (ValueError,TypeError,UnicodeError):raise APIError(400,'Reabra os comentários.') from None
-            restriction='AND (c.created_at,c.id)>(?,?)';params.extend((stamp,identifier))
+            restriction='AND (c.created_at,c.id)>(?,?)'
         with self.connect() as db:
             db.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.is_postgres else 'BEGIN')
-            post=self.accessible(db,user_id,post_id)
-            rows,total=db.fetch_many([
-                (f'''SELECT c.*,u.display_name,u.username,u.photo FROM comments c JOIN users u ON u.id=c.author_id
-                    WHERE c.post_id=? {restriction} ORDER BY c.created_at,c.id LIMIT 31''',tuple(params)),
-                ('SELECT COUNT(*) AS total FROM comments WHERE post_id=?',(post_id,))])
-            more=None
-            if len(rows)>30:more=base64.urlsafe_b64encode(json.dumps([rows[29]['created_at'],rows[29]['id']]).encode()).decode().rstrip('=')
-            return dict(comments=[self.comment_item(row,user_id,post['owner_id']) for row in rows[:30]],nextCursor=more,total=total[0]['total'])
+            post=self.accessible(db,user_id,post_id);blocked=self.blocked_ids(db,user_id)
+            parent_sql='c.parent_id IS NULL'
+            if parent:
+                parent=text(parent,1,100)
+                root=db.execute('SELECT author_id,parent_id FROM comments WHERE id=? AND post_id=?',(parent,post_id)).fetchone()
+                if not root or root['parent_id'] or root['author_id'] in blocked:raise APIError(404,'Comentário não encontrado.')
+                parent_sql='c.parent_id=?';params.append(parent)
+            if cursor:params.extend(values)
+            rows=db.execute(self.comment_query()+f''' WHERE c.post_id=? AND {parent_sql} {restriction}
+                AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=? AND b.target_id=c.author_id) OR (b.target_id=? AND b.user_id=c.author_id))
+                ORDER BY c.created_at,c.id LIMIT 31''',tuple(params)+(user_id,user_id)).fetchall()
+            more=base64.urlsafe_b64encode(json.dumps([rows[29]['created_at'],rows[29]['id']]).encode()).decode().rstrip('=') if len(rows)>30 else None
+            return dict(comments=[self.comment_item(row,user_id,post['owner_id'],blocked) for row in rows[:30]],nextCursor=more,
+                total=db.execute('SELECT COUNT(*) FROM comments WHERE post_id=?',(post_id,)).fetchone()[0])
 
-    def comment_item(self,row,user_id,owner_id):
-        return dict(id=row['id'],text=row['body'],createdAt=row['created_at'],
+    def comment_item(self,row,user_id,owner_id,blocked=()):
+        return dict(id=row['id'],text=row['body'],createdAt=row['created_at'],parentId=row['parent_id'],replyToId=row['reply_to_id'],
+            replyHandle=row['reply_handle'] if row['reply_author_id'] not in blocked else '',
+            likeCount=row['like_count'],liked=bool(row['liked']),replyCount=row['reply_count'],
             person=dict(id=row['author_id'],displayName=row['display_name'],handle=row['username'],photo=row['photo']),canDelete=user_id in (row['author_id'],owner_id))
 
     def add_comment(self,user_id,data):
         post_id=text(data.get('postId'),1,100);body=text(data.get('text'),1,1000);identifier=text(data.get('id'),1,100)
         if not re.fullmatch(r'[A-Za-z0-9_-]+',identifier):raise APIError(400,'Comentário inválido.')
         with self.transaction() as db:
-            post=self.accessible(db,user_id,post_id)
+            post=self.accessible(db,user_id,post_id);blocked=self.blocked_ids(db,user_id)
+            reply=data.get('replyToId');parent=None;target=None
+            if reply is not None:
+                reply=text(reply,1,100)
+                target=db.execute('SELECT id,parent_id,author_id FROM comments WHERE id=? AND post_id=?',(reply,post_id)).fetchone()
+                if not target or target['author_id'] in blocked:raise APIError(404,'Comentário não encontrado.')
+                parent=target['parent_id'] or target['id']
+                root=db.execute('SELECT author_id FROM comments WHERE id=?',(parent,)).fetchone()
+                if not root or root['author_id'] in blocked:raise APIError(404,'Comentário não encontrado.')
             existing=db.execute('SELECT * FROM comments WHERE id=?',(identifier,)).fetchone()
-            if existing and (existing['author_id']!=user_id or existing['post_id']!=post_id or existing['body']!=body):raise APIError(409,'Esse comentário mudou. Tente novamente.')
+            if existing and any(existing[key]!=value for key,value in (('author_id',user_id),('post_id',post_id),('body',body),('parent_id',parent),('reply_to_id',reply))):
+                raise APIError(409,'Esse comentário mudou. Tente novamente.')
             if not existing:
                 timestamp=now_iso()
-                db.execute('INSERT INTO comments VALUES (?,?,?,?,?)',(identifier,post_id,user_id,body,timestamp))
-                if user_id!=post['owner_id']:
+                db.execute('INSERT INTO comments (id,post_id,author_id,body,created_at,parent_id,reply_to_id) VALUES (?,?,?,?,?,?,?)',(identifier,post_id,user_id,body,timestamp,parent,reply))
+                if target:
+                    for recipient in {target['author_id'],post['owner_id']}-{user_id}:
+                        if self.is_blocked(db,user_id,recipient) or not self.can_view_profile(db,recipient,post['owner_id']):continue
+                        db.execute('INSERT INTO comment_reply_notifications VALUES (?,?,?,?,?,NULL)',(recipient,user_id,post_id,identifier,timestamp))
+                        self.bump_notifications(db,recipient)
+                elif user_id!=post['owner_id']:
                     db.execute('INSERT INTO comment_notifications VALUES (?,?,?,?,?,NULL)',(identifier,post['owner_id'],user_id,post_id,timestamp))
                     self.bump_notifications(db,post['owner_id'])
-            rows,total=db.fetch_many([
-                ('SELECT c.*,u.display_name,u.username,u.photo FROM comments c JOIN users u ON u.id=c.author_id WHERE c.id=?',(identifier,)),
-                ('SELECT COUNT(*) AS total FROM comments WHERE post_id=?',(post_id,))])
-            return dict(comment=self.comment_item(rows[0],user_id,post['owner_id']),total=total[0]['total'])
+            row=db.execute(self.comment_query()+' WHERE c.id=?',(user_id,identifier)).fetchone()
+            return dict(comment=self.comment_item(row,user_id,post['owner_id'],blocked),total=db.execute('SELECT COUNT(*) FROM comments WHERE post_id=?',(post_id,)).fetchone()[0])
+
+    def like_comment(self,user_id,data):
+        identifier=text(data.get('id'),1,100);post_id=text(data.get('postId'),1,100);active=data.get('active')
+        if type(active) is not bool:raise APIError(400,'Curtida inválida.')
+        with self.transaction() as db:
+            post=self.accessible(db,user_id,post_id)
+            row=db.execute('SELECT author_id,parent_id FROM comments WHERE id=? AND post_id=?',(identifier,post_id)).fetchone()
+            if not row or self.is_blocked(db,user_id,row['author_id']):raise APIError(404,'Comentário não encontrado.')
+            if row['parent_id']:
+                root=db.execute('SELECT author_id FROM comments WHERE id=?',(row['parent_id'],)).fetchone()
+                if not root or self.is_blocked(db,user_id,root['author_id']):raise APIError(404,'Comentário não encontrado.')
+            if active:
+                changed=db.execute('INSERT INTO comment_likes VALUES (?,?,?) ON CONFLICT DO NOTHING RETURNING user_id',(identifier,user_id,now_iso())).fetchone()
+                if changed and row['author_id']!=user_id and self.can_view_profile(db,row['author_id'],post['owner_id']):
+                    db.execute('INSERT INTO comment_like_notifications VALUES (?,?,?,?,?,NULL) ON CONFLICT(comment_id,actor_id) DO UPDATE SET created_at=excluded.created_at,read_at=NULL',(row['author_id'],user_id,post_id,identifier,now_iso()))
+                    self.bump_notifications(db,row['author_id'])
+            else:
+                db.execute('DELETE FROM comment_likes WHERE comment_id=? AND user_id=?',(identifier,user_id))
+                if db.execute('DELETE FROM comment_like_notifications WHERE comment_id=? AND actor_id=? RETURNING user_id',(identifier,user_id)).fetchone():self.bump_notifications(db,row['author_id'])
+            return dict(commentId=identifier,liked=active,likeCount=db.execute('SELECT COUNT(*) FROM comment_likes WHERE comment_id=?',(identifier,)).fetchone()[0])
 
     def delete_comment(self,user_id,data):
         identifier=text(data.get('id'),1,100);post_id=text(data.get('postId'),1,100)
@@ -1172,10 +1315,15 @@ class Database:
             post=self.accessible(db,user_id,post_id)
             row=db.execute('SELECT author_id FROM comments WHERE id=? AND post_id=?',(identifier,post_id)).fetchone()
             if row and user_id not in (row['author_id'],post['owner_id']):raise APIError(403,'Você só pode apagar seus comentários ou os comentários dos seus Ressoas.')
+            deleted=[]
             if row:
+                deleted=[r['id'] for r in db.execute('SELECT id FROM comments WHERE id=? OR parent_id=?',(identifier,identifier)).fetchall()]
+                marks=','.join('?' for _ in deleted);recipients=set()
+                for table in ('comment_notifications','comment_like_notifications','comment_reply_notifications'):
+                    recipients.update(r['user_id'] for r in db.execute(f'SELECT user_id FROM {table} WHERE comment_id IN ({marks})',tuple(deleted)).fetchall())
                 db.execute('DELETE FROM comments WHERE id=?',(identifier,))
-                if row['author_id']!=post['owner_id']:self.bump_notifications(db,post['owner_id'])
-            return dict(ok=True,total=db.execute('SELECT COUNT(*) FROM comments WHERE post_id=?',(post_id,)).fetchone()[0])
+                for recipient in recipients:self.bump_notifications(db,recipient)
+            return dict(ok=True,deletedIds=deleted,total=db.execute('SELECT COUNT(*) FROM comments WHERE post_id=?',(post_id,)).fetchone()[0])
 
     def likes(self, user_id, post_id):
         with self.connect() as db:
@@ -1183,14 +1331,15 @@ class Database:
             if post['owner_id'] != user_id:
                 raise APIError(403, 'Só o autor pode ver quem curtiu.')
             rows = db.execute("SELECT u.id,u.display_name,u.username,u.photo FROM actions a JOIN users u ON u.id=a.user_id WHERE a.post_id=? AND a.kind='like'", (post_id,)).fetchall()
-            return [dict(id=row['id'], displayName=row['display_name'], handle=row['username'], photo=row['photo']) for row in rows]
+            blocked=self.blocked_ids(db,user_id)
+            return [dict(id=row['id'], displayName=row['display_name'], handle=row['username'], photo=row['photo']) for row in rows if row['id'] not in blocked]
 
     def connections(self,viewer_id,target_id,kind):
         if kind not in ('following','followers'):
             raise APIError(400,'Lista de pessoas inválida.')
         with self.connect() as db:
             person=db.execute('SELECT is_private FROM users WHERE id=?',(target_id,)).fetchone()
-            if not person:raise APIError(404,'Esse perfil não foi encontrado.')
+            if not person or self.is_blocked(db,viewer_id,target_id):raise APIError(404,'Esse perfil não foi encontrado.')
             own=viewer_id==target_id
             if not own and (person['is_private'] or not db.execute('SELECT 1 FROM follows WHERE user_id=? AND target_id=?',(viewer_id,target_id)).fetchone()):
                 raise APIError(403,'As conexões estão disponíveis nos perfis públicos que você segue.')
@@ -1198,7 +1347,8 @@ class Database:
             access='' if own else ' AND (u.is_private=0 OR u.id=? OR EXISTS(SELECT 1 FROM follows allowed WHERE allowed.user_id=? AND allowed.target_id=u.id))'
             params=(target_id,) if own else (target_id,viewer_id,viewer_id)
             rows=db.execute(f'SELECT u.id,u.display_name,u.username,u.photo FROM users u JOIN follows f ON f.{joined}=u.id WHERE f.{filtered}=?{access} ORDER BY lower(u.display_name),u.id',params).fetchall()
-            return [self.person(row) for row in rows]
+            blocked=self.blocked_ids(db,viewer_id)
+            return [self.person(row) for row in rows if row['id'] not in blocked]
 
     def interactions(self, user_id, post_id):
         with self.connect() as db:
@@ -1212,6 +1362,7 @@ class Database:
                 ORDER BY lower(u.display_name),u.id,a.kind""", (post_id,user_id,user_id)).fetchall()
             people = {}
             for row in rows:
+                if self.is_blocked(db,user_id,row['id']):continue
                 person = people.setdefault(row['id'],dict(id=row['id'],displayName=row['display_name'],handle=row['username'],photo=row['photo'],liked=False,reposted=False))
                 person['liked' if row['kind']=='like' else 'reposted'] = True
             return list(people.values())

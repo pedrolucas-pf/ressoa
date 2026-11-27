@@ -14,6 +14,21 @@ class Messaging:
     def __init__(self, database):
         self.db = database
 
+    def read_many(self,db,user_id,queries):
+        view='''SELECT vm.* FROM dm_messages vm JOIN dm_threads vt ON vt.id=vm.thread_id
+            WHERE NOT EXISTS(SELECT 1 FROM dm_hidden_messages h WHERE h.user_id=? AND h.message_id=vm.id)
+            AND NOT EXISTS(SELECT 1 FROM dm_thread_clears c WHERE c.user_id=? AND c.thread_id=vm.thread_id AND (vm.created_at,vm.id)<=(c.created_at,c.message_id))
+            AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.user_id=vt.user_a AND b.target_id=vt.user_b) OR (b.user_id=vt.user_b AND b.target_id=vt.user_a))
+            AND (vt.user_a=? OR vt.user_b=?)'''
+        prepared=[]
+        for statement,parameters in queries:
+            if re.search(r'\bdm_messages\b',statement,re.I):
+                statement=re.sub(r'\bdm_messages\b','visible_messages',statement)
+                statement=('WITH visible_messages AS ('+view+'),'+statement[5:]) if statement.startswith('WITH ') else 'WITH visible_messages AS ('+view+') '+statement
+                parameters=(user_id,user_id,user_id,user_id,*parameters)
+            prepared.append((statement,parameters))
+        return db.fetch_many(prepared)
+
     @staticmethod
     def identifier(value):
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value):
@@ -43,6 +58,7 @@ class Messaging:
 
     def person(self, db, user_id, target):
         target = self.identifier(target)
+        if self.db.is_blocked(db,user_id,target):raise APIError(403,'Conversa indisponível.','blocked')
         row = db.execute('SELECT id,username,display_name,photo FROM users WHERE id=?', (target,)).fetchone()
         if not row or target == user_id:
             raise APIError(404, 'Escolha outra pessoa para conversar.')
@@ -58,14 +74,14 @@ class Messaging:
         return ('''SELECT messages_version AS version,
             (SELECT COUNT(*) FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
              WHERE (t.user_a=? OR t.user_b=?) AND m.sender_id<>? AND m.read_at IS NULL) AS unread_messages,
-            (SELECT COUNT(*) FROM dm_reaction_notifications n WHERE n.user_id=? AND n.read_at IS NULL) AS unread_reactions
+            (SELECT COUNT(*) FROM dm_reaction_notifications n JOIN dm_messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL) AS unread_reactions
             FROM users WHERE id=?''', (user_id, user_id, user_id, user_id, user_id))
 
     def summary(self, user_id, db=None):
         if db is None:
             with self.db.connect() as connection:
                 return self.summary(user_id, connection)
-        row = db.execute(*self.summary_query(user_id)).fetchone()
+        row = self.read_many(db,user_id,[self.summary_query(user_id)])[0][0]
         return self.summary_value(row)
 
     @staticmethod
@@ -78,9 +94,9 @@ class Messaging:
         params = (user_id,)*8+tuple(before or ())
         with self.db.connect() as db:
             # PostgreSQL pipelines these independent reads in one network round trip.
-            _, rows, summary = db.fetch_many([
+            _, rows, summary = self.read_many(db,user_id,[
                 ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN', ()),
-                (f'''WITH activity AS (SELECT t.id AS thread_id,m.created_at,m.kind,m.text,m.sender_id,
+                (f'''WITH activity AS (SELECT t.id AS thread_id,m.created_at,m.kind,m.text,m.sender_id,m.deleted_at,
                 u.id,u.username,u.display_name,u.photo,
                 CASE WHEN rn.created_at>m.created_at THEN rn.created_at ELSE m.created_at END AS activity_at,
                 CASE WHEN rn.created_at>m.created_at THEN rn.emoji ELSE '' END AS reaction_emoji,
@@ -95,7 +111,7 @@ class Messaging:
                 WHERE (t.user_a=? OR t.user_b=?) AND u.id<>?) SELECT * FROM activity {restriction}
                 ORDER BY activity_at DESC,thread_id DESC LIMIT 31''', params), self.summary_query(user_id)])
             items = [dict(person=self.db.person(row), updatedAt=row['activity_at'], unreadCount=row['unread_count'],
-                          preview='Reagiu com '+row['reaction_emoji']+' à sua mensagem' if row['reaction_emoji'] else row['text'][:120] if row['kind'] == 'text' else 'Enviou um Ressoa',
+                          preview='Mensagem apagada' if row['deleted_at'] else 'Reagiu com '+row['reaction_emoji']+' à sua mensagem' if row['reaction_emoji'] else row['text'][:120] if row['kind'] == 'text' else 'Enviou um Ressoa',
                           sentByMe=not row['reaction_emoji'] and row['sender_id'] == user_id) for row in rows[:30]]
             next_cursor = self.encode_cursor(rows[29]['activity_at'], rows[29]['thread_id']) if len(rows) > 30 else None
             return dict(items=items, nextCursor=next_cursor,
@@ -103,7 +119,8 @@ class Messaging:
 
     def message(self, db, user_id, row, posts=None):
         result = dict(id=row['id'], senderId=row['sender_id'], kind=row['kind'], text=row['text'],
-                      createdAt=row['created_at'], readAt=row['read_at'], post=None, unavailable=False, reactions=[], reactionNotice=None)
+                      createdAt=row['created_at'], readAt=row['read_at'], post=None, unavailable=False, reactions=[], reactionNotice=None, deleted=bool(row['deleted_at']))
+        if result['deleted']:return result
         if row['kind'] == 'ressoa':
             result['post'] = dict(json.loads(row['payload']), id=row['id'], ownerId=row['sender_id'], kind='direct', visibility='direct')
         elif row['kind'] == 'post':
@@ -135,6 +152,8 @@ class Messaging:
     def conversation(self, user_id, target, cursor='', reaction_ids=''):
         before = self.cursor(cursor)
         target = self.identifier(target)
+        with self.db.connect() as access:
+            if self.db.is_blocked(access,user_id,target):raise APIError(403,'Conversa indisponível.','blocked')
         if target == user_id:
             raise APIError(404, 'Escolha outra pessoa para conversar.')
         a, b = sorted((user_id, target))
@@ -145,11 +164,11 @@ class Messaging:
         extra_sql = ' OR m.id IN ('+','.join('?' for _ in extra)+')' if extra else ''
         page_sql = f'SELECT id FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) {restriction} ORDER BY created_at DESC,id DESC LIMIT 50'
         with self.db.connect() as db:
-            _, people, rows, summary, reaction_rows, reaction_snapshot = db.fetch_many([
+            _, people, rows, summary, reaction_rows, reaction_snapshot, visible_extra = self.read_many(db,user_id,[
                 ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN', ()),
                 ('''SELECT id,username,display_name,photo,
                     (SELECT COUNT(*) FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) AND sender_id=? AND read_at IS NULL)
-                    +(SELECT COUNT(*) FROM dm_reaction_notifications WHERE user_id=? AND actor_id=? AND read_at IS NULL) AS unread_count
+                    +(SELECT COUNT(*) FROM dm_reaction_notifications n JOIN dm_messages nm ON nm.id=n.message_id WHERE n.user_id=? AND n.actor_id=? AND n.read_at IS NULL) AS unread_count
                     FROM users WHERE id=?''', (a,b,target,user_id,target,target)),
                 (f'''SELECT * FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) {restriction}
                     ORDER BY created_at DESC,id DESC LIMIT 51''', (a, b, *(before or ()))), self.summary_query(user_id),
@@ -159,7 +178,8 @@ class Messaging:
                     WHERE t.user_a=? AND t.user_b=? AND r.user_id<>m.sender_id AND (m.id IN ({page_sql}) {extra_sql})''', (user_id,a,b,a,b,*(before or ()),*extra)),
                 ('''SELECT n.created_at,n.message_id FROM dm_reaction_notifications n JOIN dm_messages m ON m.id=n.message_id
                     WHERE n.user_id=? AND n.actor_id=? AND n.read_at IS NULL AND m.thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?)
-                    ORDER BY n.created_at DESC,n.message_id DESC LIMIT 1''',(user_id,target,a,b))])
+                    ORDER BY n.created_at DESC,n.message_id DESC LIMIT 1''',(user_id,target,a,b)),
+                ('SELECT id FROM dm_messages WHERE thread_id=(SELECT id FROM dm_threads WHERE user_a=? AND user_b=?) AND id IN ('+(','.join('?' for _ in extra) or 'NULL')+')',(a,b,*extra))])
             if not people:
                 raise APIError(404, 'Escolha outra pessoa para conversar.')
             # Shared posts are reauthorized together, including expired weekly choices.
@@ -181,7 +201,7 @@ class Messaging:
             for item in items:
                 item['reactions'] = reactions.get(item['id'], [])
                 item['reactionNotice'] = notices.get(item['id'])
-            return dict(person=self.db.person(people[0]), items=items, reactions=reactions,reactionNotices=notices,unreadCount=people[0]['unread_count'],
+            return dict(person=self.db.person(people[0]), items=items, reactions=reactions,reactionNotices=notices,unreadCount=people[0]['unread_count'],hiddenIds=sorted(set(extra)-{row['id'] for row in visible_extra}),
                         readCursor=self.encode_cursor(rows[0]['created_at'],rows[0]['id']) if rows else None,
                         reactionReadCursor=self.encode_cursor(reaction_snapshot[0]['created_at'],reaction_snapshot[0]['message_id']) if reaction_snapshot else None,
                         nextCursor=next_cursor, summary=self.summary_value(summary[0]))
@@ -192,8 +212,8 @@ class Messaging:
         if emoji is not None and (not isinstance(emoji,str) or emoji not in REACTION_EMOJIS):
             raise APIError(400, 'Escolha um dos emojis disponíveis.')
         with self.db.transaction() as db:
-            message = db.execute('''SELECT t.user_a,t.user_b,m.sender_id FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
-                WHERE m.id=? AND (t.user_a=? OR t.user_b=?)''',(identifier,user_id,user_id)).fetchone()
+            found=self.read_many(db,user_id,[("SELECT t.user_a,t.user_b,m.sender_id FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id WHERE m.id=? AND m.deleted_at IS NULL AND (t.user_a=? OR t.user_b=?)",(identifier,user_id,user_id))])[0]
+            message=found[0] if found else None
             if not message:
                 raise APIError(404, 'Mensagem não encontrada.')
             if message['sender_id']==user_id:
@@ -262,7 +282,7 @@ class Messaging:
                 db.execute('INSERT INTO dm_threads VALUES (?,?,?,?) ON CONFLICT(user_a,user_b) DO NOTHING',
                            (str(uuid.uuid4()), a, b, timestamp))
                 thread = self.thread(db, user_id, target)
-            db.execute('INSERT INTO dm_messages VALUES (?,?,?,?,?,?,?,?,NULL)',
+            db.execute('INSERT INTO dm_messages (id,thread_id,sender_id,kind,text,payload,post_id,created_at,read_at) VALUES (?,?,?,?,?,?,?,?,NULL)',
                        (identifier, thread['id'], user_id, kind, message, json.dumps(payload), post_id, timestamp))
             db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id IN (?,?)', (user_id, target))
             row = db.execute('SELECT * FROM dm_messages WHERE id=?', (identifier,)).fetchone()
@@ -311,9 +331,40 @@ class Messaging:
                         (now_iso(),user_id,target,thread['id'],*reaction_keys)).fetchall()
                 if changed:
                     db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id=?', (user_id,))
-            summaries,remaining=db.fetch_many([self.summary_query(user_id),
+            summaries,remaining=self.read_many(db,user_id,[self.summary_query(user_id),
                 ('''SELECT (SELECT COUNT(*) FROM dm_messages WHERE thread_id=? AND sender_id=? AND read_at IS NULL)
                     +(SELECT COUNT(*) FROM dm_reaction_notifications n JOIN dm_messages m ON m.id=n.message_id
                       WHERE m.thread_id=? AND n.user_id=? AND n.actor_id=? AND n.read_at IS NULL) AS unread_count''',
                     (thread['id'] if thread else '',target,thread['id'] if thread else '',user_id,target))])
             return dict(summary=self.summary_value(summaries[0]),unreadCount=remaining[0]['unread_count'])
+
+    def delete(self,user_id,data):
+        identifier=self.identifier(data.get('id'));scope=data.get('scope','me')
+        if scope not in ('me','everyone'):raise APIError(400,'Opção de exclusão inválida.')
+        with self.db.transaction() as db:
+            row=db.execute('''SELECT m.*,t.user_a,t.user_b FROM dm_messages m JOIN dm_threads t ON t.id=m.thread_id
+                WHERE m.id=? AND (t.user_a=? OR t.user_b=?)''',(identifier,user_id,user_id)).fetchone()
+            if not row:raise APIError(404,'Mensagem não encontrada.')
+            if scope=='everyone':
+                if row['sender_id']!=user_id:raise APIError(403,'Só quem enviou pode apagar a mensagem para todos.')
+                if not row['deleted_at']:
+                    db.execute("UPDATE dm_messages SET kind='text',text='',payload='{}',post_id=NULL,deleted_at=?,read_at=COALESCE(read_at,?) WHERE id=?",(now_iso(),now_iso(),identifier))
+                    db.execute('DELETE FROM dm_reactions WHERE message_id=?',(identifier,))
+                    db.execute('DELETE FROM dm_reaction_notifications WHERE message_id=?',(identifier,))
+                    db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id IN (?,?)',(row['user_a'],row['user_b']))
+            elif db.execute('INSERT INTO dm_hidden_messages VALUES (?,?) ON CONFLICT DO NOTHING RETURNING message_id',(user_id,identifier)).fetchone():
+                db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id=?',(user_id,))
+            return dict(ok=True,id=identifier,scope=scope,summary=self.summary(user_id,db))
+
+    def clear(self,user_id,data):
+        target=self.identifier(data.get('user'))
+        if target==user_id:raise APIError(400,'Conversa inválida.')
+        with self.db.transaction() as db:
+            thread=self.thread(db,user_id,target)
+            if thread:
+                latest=db.execute('SELECT created_at,id FROM dm_messages WHERE thread_id=? ORDER BY created_at DESC,id DESC LIMIT 1',(thread['id'],)).fetchone()
+                if latest:
+                    db.execute('''INSERT INTO dm_thread_clears VALUES (?,?,?,?) ON CONFLICT(user_id,thread_id)
+                        DO UPDATE SET created_at=excluded.created_at,message_id=excluded.message_id''',(user_id,thread['id'],latest['created_at'],latest['id']))
+                    db.execute('UPDATE users SET messages_version=messages_version+1 WHERE id=?',(user_id,))
+            return dict(ok=True,summary=self.summary(user_id,db))

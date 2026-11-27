@@ -43,10 +43,10 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       const person = document.createElement('div');person.className='person-identity';
       const details = document.createElement('div');details.className='notification-copy';
       profile.replaceWith(person);details.append(profile);person.append(avatar,details);
-      const message = document.createElement(item.kind==='comment'?'button':'span');
+      const message = document.createElement(['comment','comment_like','reply'].includes(item.kind)?'button':'span');
       message.className = 'notification-message';
-      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa',mention:'Marcou você em um Ressoa'})[item.kind];
-      if(item.kind==='comment'){
+      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa',mention:'Marcou você em um Ressoa',comment_like:'Curtiu seu comentário',reply:'Respondeu a um comentário'})[item.kind];
+      if(['comment','comment_like','reply'].includes(item.kind)){
         message.type='button';message.dataset.notificationPost=item.postId;message.dataset.notificationComment='true';
         message.title='Ver comentários';message.setAttribute('aria-label','Ver comentários deste Ressoa');
         message.insertAdjacentHTML('beforeend','<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/></svg>');

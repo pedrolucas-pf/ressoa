@@ -12,7 +12,7 @@ const emptyIcon='<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy=
 const reactionEmojis=[['❤️','Coração'],['👍','Joia'],['😂','Rindo'],['😮','Surpresa'],['🔥','Fogo'],['🥲','Sorrindo com lágrima'],['😍','Apaixonado'],['🥰','Carinho'],['😊','Sorriso'],['😁','Felicidade'],['😎','Estiloso'],['🤩','Encantado'],['😭','Chorando'],['😢','Triste'],['😅','Sorriso sem graça'],['🤣','Rindo muito'],['🤔','Pensando'],['👀','De olho'],['🙌','Celebrando'],['👏','Palmas'],['🤝','Aperto de mãos'],['💪','Força'],['🙏','Agradecimento'],['👌','Perfeito'],['💯','Cem por cento'],['✨','Brilho'],['🎉','Festa'],['🎵','Nota musical'],['🎶','Notas musicais'],['🎧','Fones'],['💿','Disco'],['🖤','Coração preto'],['💜','Coração roxo'],['💙','Coração azul'],['🤍','Coração branco'],['💔','Coração partido'],['🫶','Coração com as mãos']];
 const smileIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8 14a4.5 4.5 0 0 0 8 0M8.5 9h.01M15.5 9h.01"/></svg>';
 
-export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPost }) {
+export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPost, onConfirm, onBlock }) {
   const $=selector=>document.querySelector(selector);
   const dialog=$('#messages-dialog'),badge=$('#message-count'),button=$('#messages-button');
   const inbox=$('#messages-inbox'),chat=$('#messages-chat'),thread=$('#messages-thread'),status=$('#messages-status');
@@ -25,7 +25,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   const drafts=new Map(),visible=new Set(),conversationCache=new Map(),conversationJobs=new Map();let reading=false,readTimer;
   let inboxLoaded=false,inboxVersion=-1,inboxJob=null,cacheEpoch=0;
   const reactionJobs=new Map(),reactionChanges=new Map(),readCounts=new Map();let reactionTarget=null;
-  let pendingRead=null;
+  let pendingRead=null,actionMessage=null;
+  const actionsDialog=$('#message-actions-dialog');
   const self=()=>getAccount().user.id;
   const observer=new IntersectionObserver(entries=>{
     if(!dialog.open||document.hidden)return;
@@ -56,7 +57,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     const account=owner,epoch=cacheEpoch,controller=new AbortController(),job={controller};
     inboxJob=job;
     job.promise=api('/api/messages',{signal:controller.signal}).then(data=>{
-      if(account!==self()||epoch!==cacheEpoch)return;
+      if(account!==self()||epoch!==cacheEpoch||controller.signal.aborted)return;
       for(const item of data.items){const read=readCounts.get(item.person.id);if(!read)continue;
         if(data.summary.version<read.version)item.unreadCount=read.count;else readCounts.delete(item.person.id);}
       conversations=data.items;inboxCursor=data.nextCursor;inboxLoaded=true;inboxVersion=data.summary.version;
@@ -73,7 +74,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     conversationJobs.set(target,job);
     const watched=person?.id===target?[...visible].slice(0,50):[];
     job.promise=api('/api/messages?'+new URLSearchParams({user:target,...(watched.length?{reactions:watched.join(',')}:{})}),{signal:controller.signal}).then(data=>{
-      if(account===self()&&epoch===cacheEpoch&&data.summary.version>=(conversationCache.get(target)?.summary.version??-1))rememberConversation(data);
+      if(account===self()&&epoch===cacheEpoch&&!controller.signal.aborted&&data.summary.version>=(conversationCache.get(target)?.summary.version??-1))rememberConversation(data);
       return data;
     }).finally(()=>{if(conversationJobs.get(target)===job)conversationJobs.delete(target);});
     return job.promise;
@@ -86,7 +87,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   }
   function avatar(value){return `<span class="profile-avatar">${value.photo?`<img src="${escape(value.photo)}" alt="">`:escape(value.displayName.slice(0,2).toUpperCase())}</span>`;}
   function renderHeader(value=null){
-    dialog.dataset.view=value?'chat':'inbox';
+    dialog.dataset.view=value?'chat':'inbox';$('#messages-options').hidden=!value;
     $('#messages-title').textContent=value?value.displayName||'Conversa':pendingPost?'Enviar Ressoa':'Mensagens';
     $('#messages-subtitle').hidden=!value;
     $('#messages-subtitle').textContent=value?.handle?'@'+value.handle:value?'Carregando…':'';
@@ -99,7 +100,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     return result.sort((a,b)=>a.emoji.localeCompare(b.emoji));
   }
   function renderReactions(node,message){
-    const canReact=message.senderId!==self();
+    const canReact=!message.deleted&&message.senderId!==self();
     const job=reactionJobs.get(message.id),reactions=job?ownReaction(message.reactions,job.emoji):(message.reactions||[]);
     const holder=node.querySelector('.message-reactions'),signature=JSON.stringify([reactions,!!job,canReact]);
     if(holder.dataset.signature!==signature){
@@ -140,9 +141,50 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   reactionDialog.addEventListener('close',()=>{reactionTarget=null;});
   function renderInbox(){
     $('#messages-list-label').hidden=!conversations.length;
-    list.innerHTML=conversations.length?conversations.map(item=>`<button type="button" class="message-conversation${item.unreadCount?' unread':''}" data-conversation="${escape(item.person.id)}" aria-label="${escape(item.person.displayName+(item.unreadCount?', '+item.unreadCount+' novidades não lidas':''))}">${avatar(item.person)}<span class="message-conversation-copy"><span class="message-conversation-name"><strong>${escape(item.person.displayName)}</strong><span>@${escape(item.person.handle)}</span></span><small>${escape(item.sentByMe?'Você: ':'')}${escape(item.preview)}</small></span><span class="message-conversation-meta"><time datetime="${escape(item.updatedAt)}" title="${escape(stamp(item.updatedAt))}">${escape(inboxTime(item.updatedAt))}</time>${item.unreadCount?`<span class="message-unread" aria-hidden="true">${unreadLabel(item.unreadCount)}</span>`:''}</span></button>`).join(''):`<div class="empty message-empty">${emptyIcon}<h3>Nenhuma conversa ainda</h3><p>Busque alguém para enviar uma mensagem ou um Ressoa.</p></div>`;
+    list.innerHTML=conversations.length?conversations.map(item=>{
+      const label=item.person.displayName+(item.unreadCount?', '+item.unreadCount+' novidades não lidas':'');
+      return '<div class="message-conversation-row"><button type="button" class="message-conversation'+(item.unreadCount?' unread':'')+'" data-conversation="'+escape(item.person.id)+'" aria-label="'+escape(label)+'">'+avatar(item.person)+'<span class="message-conversation-copy"><span class="message-conversation-name"><strong>'+escape(item.person.displayName)+'</strong><span>@'+escape(item.person.handle)+'</span></span><small>'+escape(item.sentByMe?'Você: ':'')+escape(item.preview)+'</small></span><span class="message-conversation-meta"><time datetime="'+escape(item.updatedAt)+'" title="'+escape(stamp(item.updatedAt))+'">'+escape(inboxTime(item.updatedAt))+'</time>'+(item.unreadCount?'<span class="message-unread" aria-hidden="true">'+unreadLabel(item.unreadCount)+'</span>':'')+'</span></button><button type="button" class="icon-button message-conversation-menu" data-clear-conversation="'+escape(item.person.id)+'" aria-label="Apagar conversa com '+escape(item.person.displayName)+'" title="Apagar conversa"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button></div>';
+    }).join(''):'<div class="empty message-empty">'+emptyIcon+'<h3>Nenhuma conversa ainda</h3><p>Busque alguém para enviar uma mensagem ou um Ressoa.</p></div>';
     more.hidden=!inboxCursor;
   }
+  function invalidateConversation(target){
+    resetRequest();inboxJob?.controller.abort();inboxJob=null;inboxVersion=-1;
+    conversationJobs.get(target)?.controller.abort();conversationJobs.delete(target);conversationCache.delete(target);
+  }
+  function clearConversation(target){
+    onConfirm('Apagar conversa?','O histórico será removido só para você. A outra pessoa continuará com as mensagens.',async()=>{
+      const account=owner,epoch=cacheEpoch;
+      try{
+        const data=await api('/api/messages/conversation',{method:'DELETE',body:{user:target}});
+        if(account!==self()||epoch!==cacheEpoch)return;
+        invalidateConversation(target);stopPreview();updateSummary(data.summary);conversations=conversations.filter(item=>item.person.id!==target);
+        if(person?.id===target){input.value='';drafts.delete(target);thread.replaceChildren();showInbox();}
+        else{renderInbox();void fetchInbox().catch(()=>{});}
+        toast('Conversa apagada só para você.');
+      }catch(error){toast(error.message);}
+    });
+  }
+  actionsDialog.addEventListener('click',event=>{
+    const control=event.target.closest('[data-delete-message-scope]');if(!control||!actionMessage)return;
+    const identifier=actionMessage,target=person?.id,scope=control.dataset.deleteMessageScope;actionsDialog.close();
+    onConfirm(scope==='everyone'?'Apagar para todos?':'Apagar só para você?',scope==='everyone'?'O conteúdo será removido da conversa das duas pessoas.':'Essa mensagem continuará disponível para a outra pessoa.',async()=>{
+      const account=owner,epoch=cacheEpoch;
+      try{
+        const data=await api('/api/messages',{method:'DELETE',body:{id:identifier,scope}});
+        if(account!==self()||epoch!==cacheEpoch)return;
+        invalidateConversation(target);stopPreview();updateSummary(data.summary);
+        if(person?.id===target){
+          if(scope==='me')items=items.filter(item=>item.id!==identifier);
+          else{const item=items.find(item=>item.id===identifier);if(item)Object.assign(item,{kind:'text',text:'',post:null,deleted:true,reactions:[],reactionNotice:null});}
+          renderMessages();
+        }
+        void fetchInbox().catch(()=>{});
+      }catch(error){toast(error.message);}
+    });
+  });
+  actionsDialog.addEventListener('close',()=>{actionMessage=null;});
+  $('#messages-clear').addEventListener('click',()=>{if(person)clearConversation(person.id);$('#messages-options').open=false;});
+  $('#messages-block').addEventListener('click',()=>{if(person)onBlock(person.id);$('#messages-options').open=false;});
   function ressoaMarkup(message){
     if(message.loading)return '<p class="form-note">Atualizando Ressoa…</p>';
     const post=message.post;if(message.unavailable||!post)return '<p class="form-note">Este Ressoa não está mais disponível para você.</p>';
@@ -158,13 +200,13 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     thread.querySelector('.empty')?.remove();
     let position=0;
     for(const message of items){
-      let node=nodes.get(message.id);const signature=JSON.stringify([message.kind,message.text,message.post,message.unavailable,message.loading]);
+      let node=nodes.get(message.id);const signature=JSON.stringify([message.kind,message.text,message.post,message.unavailable,message.loading,message.deleted]);
       if(!node){node=document.createElement('article');node.dataset.message=message.id;}
       node.className='message-bubble'+(message.senderId===self()?' sent':' received')+(message.kind!=='text'?' has-ressoa':'');
       if(node.dataset.signature!==signature){
         if(node.querySelector('.cover-play.playing'))stopPreview();
         node.dataset.signature=signature;
-        node.innerHTML=(message.kind==='text'?`<p class="message-text">${escape(message.text)}</p>`:ressoaMarkup(message))+`<div class="message-footer">${message.senderId!==self()?`<button type="button" class="message-react" data-message-react="${escape(message.id)}" aria-label="Reagir à mensagem" aria-haspopup="dialog" aria-controls="message-reaction-dialog" title="Reagir">${smileIcon}</button>`:''}<time datetime="${escape(message.createdAt)}" title="${escape(stamp(message.createdAt))}" aria-label="${escape(stamp(message.createdAt))}">${escape(clock(message.createdAt))}</time></div><span class="message-reactions" role="group" aria-label="Reações à mensagem"></span>`;
+        node.innerHTML=(message.deleted?'<p class="message-deleted">Mensagem apagada</p>':message.kind==='text'?`<p class="message-text">${escape(message.text)}</p>`:ressoaMarkup(message))+`<div class="message-footer">${!message.deleted&&message.senderId!==self()?`<button type="button" class="message-react" data-message-react="${escape(message.id)}" aria-label="Reagir à mensagem" aria-haspopup="dialog" aria-controls="message-reaction-dialog" title="Reagir">${smileIcon}</button>`:''}<button type="button" class="message-menu" data-message-menu="${escape(message.id)}" aria-label="Opções da mensagem" title="Opções">•••</button><time datetime="${escape(message.createdAt)}" title="${escape(stamp(message.createdAt))}" aria-label="${escape(stamp(message.createdAt))}">${escape(clock(message.createdAt))}</time></div><span class="message-reactions" role="group" aria-label="Reações à mensagem"></span>`;
       }
       renderReactions(node,message);
       if(thread.children[position]!==node)thread.insertBefore(node,thread.children[position]||null);
@@ -194,7 +236,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     try{
       const data=append?await api('/api/messages?'+new URLSearchParams({user:target,cursor}),{signal:request.signal}):await fetchConversation(target);
       if(token!==generation||account!==self()||person?.id!==target||!dialog.open)return;
-      person=data.person;
+      person=data.person;input.disabled=false;send.disabled=false;
+      items=items.filter(item=>!(data.hiddenIds||[]).includes(item.id));
       renderHeader(person);
       for(const item of items)if(Object.hasOwn(data.reactions||{},item.id)){item.reactions=data.reactions[item.id];reconcileReactions(item,data.summary.version);}
       for(const item of items)if(Object.hasOwn(data.reactionNotices||{},item.id))item.reactionNotice=data.reactionNotices[item.id];
@@ -206,7 +249,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
       if(!append)loadedVersion=data.summary.version;
       if(initial)pendingRead=data.unreadCount?{user:target,through:data.readCursor,reactionThrough:data.reactionReadCursor}:null;
       updateSummary(data.summary);renderMessages(initial,append);status.textContent='';updatePending();
-    }catch(error){if(error.name!=='AbortError'&&token===generation)status.textContent=error.message;}
+    }catch(error){if(error.name!=='AbortError'&&token===generation){status.textContent=error.message;if(error.status===403||error.status===404){conversationCache.delete(target);items=[];thread.replaceChildren();input.disabled=true;send.disabled=true;}}}
     finally{if(token===generation){request=null;older.disabled=false;thread.setAttribute('aria-busy','false');}}
   }
   function showInbox(){
@@ -228,7 +271,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     items=cached?cached.items.map(item=>item.kind==='post'?{...item,post:null,loading:true}:item):[];
     cursor=cached?.nextCursor||null;loadedVersion=cached?.summary.version??-1;observer.disconnect();visible.clear();thread.replaceChildren();
     inbox.hidden=true;chat.hidden=false;back.hidden=false;older.hidden=true;renderHeader(person);
-    input.value=drafts.get(target)||'';submission=null;
+    input.disabled=false;send.disabled=false;input.value=drafts.get(target)||'';submission=null;
     if(!dialog.open)dialog.showModal();resizeInput();updatePending();
     if(cached)renderMessages(true);else thread.innerHTML=loadingContent();
     await loadConversation(false,true);
@@ -296,6 +339,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   });
   $('#messages-cancel-post').addEventListener('click',()=>{pendingPost=null;pendingShareId=null;updatePending();});
   thread.addEventListener('click',event=>{
+    const menu=event.target.closest('[data-message-menu]');if(menu){const item=items.find(item=>item.id===menu.dataset.messageMenu);if(!item)return;actionMessage=item.id;actionsDialog.querySelector('[data-delete-message-scope="everyone"]').hidden=item.senderId!==self()||item.deleted;actionsDialog.showModal();return;}
     const reaction=event.target.closest('[data-message-react],[data-react-emoji]');
     if(reaction){const identifier=reaction.closest('[data-message]').dataset.message;
       if(reaction.hasAttribute('data-react-emoji'))void reactToMessage(identifier,reaction.dataset.reactEmoji);
@@ -315,7 +359,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     },200);
   });
   results.addEventListener('click',event=>{const item=event.target.closest('[data-new-conversation]');if(item)void start(item.dataset.newConversation);});
-  list.addEventListener('click',event=>{const item=event.target.closest('[data-conversation]');if(item)void start(item.dataset.conversation);});
+  list.addEventListener('click',event=>{const remove=event.target.closest('[data-clear-conversation]');if(remove){clearConversation(remove.dataset.clearConversation);return;}const item=event.target.closest('[data-conversation]');if(item)void start(item.dataset.conversation);});
   button.addEventListener('click',()=>{pendingPost=null;pendingShareId=null;if(!dialog.open)dialog.showModal();showInbox();});
   back.addEventListener('click',showInbox);more.addEventListener('click',()=>void loadInbox(true));older.addEventListener('click',()=>void loadConversation(true));
   dialog.addEventListener('close',()=>{pendingRead=null;if(reactionDialog.open)reactionDialog.close();stopPreview();resetRequest();searchRequest?.abort();clearTimeout(searchTimer);clearTimeout(readTimer);observer.disconnect();visible.clear();if(person)drafts.set(person.id,input.value);});
@@ -335,7 +379,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   });
   function clearMemory(){
     cacheEpoch++;
-    inboxJob?.controller.abort();inboxJob=null;if(dialog.open)dialog.close();resetRequest();
+    inboxJob?.controller.abort();inboxJob=null;if(actionsDialog.open)actionsDialog.close();if(dialog.open)dialog.close();resetRequest();
     conversationJobs.forEach(job=>job.controller.abort());conversationJobs.clear();
     person=null;items=[];conversations=[];conversationCache.clear();drafts.clear();thread.replaceChildren();list.replaceChildren();
     reactionJobs.clear();reactionChanges.clear();
@@ -344,6 +388,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     inboxLoaded=false;inboxVersion=-1;loadedVersion=-1;pendingPost=null;submission=null;summary={version:-1,unreadCount:0};updateSummary(summary);
   }
   window.addEventListener('sessionexpired',clearMemory);
+  window.addEventListener('privacychange',()=>{clearMemory();void poll(true);});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){void poll(true);void readVisible();}});
   document.addEventListener('close',()=>{if(dialog.open)setTimeout(readVisible,0);},true);
   setInterval(poll,4000);void poll(true);
