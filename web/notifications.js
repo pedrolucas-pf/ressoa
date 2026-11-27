@@ -1,6 +1,6 @@
 import { api, getAccount, busy, mutate, updateNotifications, refreshPendingFollows } from './session.js';
 
-export function createNotifications({ identity, followButton, toast, onFollowChange, onResponse, onComment, onMessage }) {
+export function createNotifications({ identity, followButton, toast, onFollowChange, onResponse, onComment }) {
   const button = document.getElementById('notifications-button');
   const count = document.getElementById('notification-count');
   const dialog = document.getElementById('notifications-dialog');
@@ -13,7 +13,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   let failedAppend = false;
   let checkingFollows = false;
   const processing = new Map();
-  const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt, item.postId || '', item.commentId || '',item.messageId||'']);
+  const key = item => JSON.stringify([item.kind, item.person.id, item.createdAt, item.postId || '', item.commentId || '']);
   const expired = item => item.kind !== 'request' && item.expiresAt && Date.parse(item.expiresAt) <= Date.now();
 
   function updateBadge() {
@@ -45,7 +45,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
       profile.replaceWith(person);details.append(profile);person.append(avatar,details);
       const message = document.createElement(item.kind==='comment'?'button':'span');
       message.className = 'notification-message';
-      message.textContent = item.kind==='reaction'?`Reagiu com ${item.emoji} à sua mensagem`:({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa',mention:'Marcou você em um Ressoa'})[item.kind];
+      message.textContent = ({request:'Quer seguir você',follow:'Começou a seguir você',like:'Curtiu seu Ressoa',repost:'Repostou seu Ressoa',comment:'Comentou no seu Ressoa',mention:'Marcou você em um Ressoa'})[item.kind];
       if(item.kind==='comment'){
         message.type='button';message.dataset.notificationPost=item.postId;message.dataset.notificationComment='true';
         message.title='Ver comentários';message.setAttribute('aria-label','Ver comentários deste Ressoa');
@@ -65,10 +65,6 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
           actions.append(action);
         }
       } else if (item.kind === 'follow') actions.innerHTML = followButton(item.person);
-      else if(item.kind==='reaction'){
-        const open=document.createElement('button');open.type='button';open.className='button';
-        open.dataset.notificationConversation=item.person.id;open.textContent='Ver conversa';actions.append(open);
-      }
       else {
         const link=document.createElement('a');link.className='notification-post';
         link.href='#ressoa/'+encodeURIComponent(item.postId);link.dataset.notificationPost=item.postId;
@@ -98,8 +94,6 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   }
 
   content.addEventListener('click', async event => {
-    const conversation=event.target.closest('[data-notification-conversation]');
-    if(conversation){event.preventDefault();dialog.close();onMessage?.(conversation.dataset.notificationConversation);return;}
     const postLink=event.target.closest('[data-notification-post]');
     if (postLink) { dialog.close();if(postLink.hasAttribute('data-notification-comment')){event.preventDefault();onComment?.(postLink.dataset.notificationPost);}return; }
     const control = event.target.closest('[data-accept-request], [data-decline-request], [data-dismiss-notification]');
@@ -118,7 +112,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
     try {
       const result = item.kind === 'request'
         ? await mutate('/api/follow-request', 'POST', { requester: item.person.id, accept, createdAt: item.createdAt, compact: true })
-        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId,commentId:item.commentId,messageId:item.messageId });
+        : await mutate('/api/notifications', 'DELETE', { actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId,commentId:item.commentId });
       if (owner !== getAccount().user.id) return;
       updateNotifications(result.summary, owner);
       items = items.filter(item => key(item) !== rowKey);
@@ -149,7 +143,7 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
     let succeeded = false;
     try {
       const { summary } = await api('/api/notifications/read', { method: 'POST', body: {
-        items: unread.map(item => ({ actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId,commentId:item.commentId,messageId:item.messageId }))
+        items: unread.map(item => ({ actorId: item.person.id, createdAt: item.createdAt,kind:item.kind,postId:item.postId,commentId:item.commentId }))
       } });
       if (owner !== getAccount().user.id) return;
       updateNotifications(summary, owner);
@@ -231,5 +225,5 @@ export function createNotifications({ identity, followButton, toast, onFollowCha
   setInterval(poll, 30000);
   setInterval(pollPendingFollows, 5000);
   updateBadge();
-  return { refresh: () => load(),check:poll };
+  return { refresh: () => load() };
 }

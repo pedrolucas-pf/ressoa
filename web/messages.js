@@ -7,11 +7,12 @@ const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<'
 const stamp=value=>new Date(value).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
 const clock=value=>new Date(value).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 const inboxTime=value=>new Date(value).toDateString()===new Date().toDateString()?clock(value):new Date(value).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+const unreadLabel=count=>count>4?'+4':String(count);
 const emptyIcon='<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="19"/><circle cx="24" cy="24" r="6"/><circle cx="24" cy="24" r="2"/><path d="M10 24a14 14 0 0 1 14-14m0 28a14 14 0 0 0 14-14"/></svg>';
 const reactionEmojis=[['❤️','Coração'],['👍','Joia'],['😂','Rindo'],['😮','Surpresa'],['🔥','Fogo'],['🥲','Sorrindo com lágrima'],['😍','Apaixonado'],['🥰','Carinho'],['😊','Sorriso'],['😁','Felicidade'],['😎','Estiloso'],['🤩','Encantado'],['😭','Chorando'],['😢','Triste'],['😅','Sorriso sem graça'],['🤣','Rindo muito'],['🤔','Pensando'],['👀','De olho'],['🙌','Celebrando'],['👏','Palmas'],['🤝','Aperto de mãos'],['💪','Força'],['🙏','Agradecimento'],['👌','Perfeito'],['💯','Cem por cento'],['✨','Brilho'],['🎉','Festa'],['🎵','Nota musical'],['🎶','Notas musicais'],['🎧','Fones'],['💿','Disco'],['🖤','Coração preto'],['💜','Coração roxo'],['💙','Coração azul'],['🤍','Coração branco'],['💔','Coração partido'],['🫶','Coração com as mãos']];
 const smileIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8 14a4.5 4.5 0 0 0 8 0M8.5 9h.01M15.5 9h.01"/></svg>';
 
-export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPost, onNotifications }) {
+export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPost }) {
   const $=selector=>document.querySelector(selector);
   const dialog=$('#messages-dialog'),badge=$('#message-count'),button=$('#messages-button');
   const inbox=$('#messages-inbox'),chat=$('#messages-chat'),thread=$('#messages-thread'),status=$('#messages-status');
@@ -23,7 +24,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   let request,searchRequest,generation=0,searchTimer,polling=false,sending=false,lastPoll=0,loadedVersion=-1,pendingPost=null,pendingShareId=null,submission=null;
   const drafts=new Map(),visible=new Set(),conversationCache=new Map(),conversationJobs=new Map();let reading=false,readTimer;
   let inboxLoaded=false,inboxVersion=-1,inboxJob=null,cacheEpoch=0;
-  const reactionJobs=new Map(),reactionChanges=new Map();let reactionTarget=null;
+  const reactionJobs=new Map(),reactionChanges=new Map(),readCounts=new Map();let reactionTarget=null;
+  let pendingRead=null;
   const self=()=>getAccount().user.id;
   const observer=new IntersectionObserver(entries=>{
     if(!dialog.open||document.hidden)return;
@@ -33,9 +35,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
 
   function updateSummary(value){
     if(!value||value.version<summary.version)return;
-    summary=value;badge.hidden=!value.unreadCount;badge.textContent=value.unreadCount>99?'99+':String(value.unreadCount);
-    button.setAttribute('aria-label',value.unreadCount?`Mensagens: ${value.unreadCount} não lidas`:'Mensagens');
-    if(value.notificationsVersion>(getAccount().notifications?.version||0))onNotifications?.();
+    summary=value;badge.hidden=!value.unreadCount;badge.textContent=unreadLabel(value.unreadCount);
+    button.setAttribute('aria-label',value.unreadCount?`Mensagens: ${value.unreadCount} novidades não lidas`:'Mensagens');
   }
   function resetRequest(){request?.abort();request=null;generation++;status.textContent='';}
   function reconcileReactions(message,version){
@@ -56,6 +57,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     inboxJob=job;
     job.promise=api('/api/messages',{signal:controller.signal}).then(data=>{
       if(account!==self()||epoch!==cacheEpoch)return;
+      for(const item of data.items){const read=readCounts.get(item.person.id);if(!read)continue;
+        if(data.summary.version<read.version)item.unreadCount=read.count;else readCounts.delete(item.person.id);}
       conversations=data.items;inboxCursor=data.nextCursor;inboxLoaded=true;inboxVersion=data.summary.version;
       updateSummary(data.summary);
       const recent=data.items[0]?.person.id,cached=conversationCache.get(recent);
@@ -137,7 +140,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   reactionDialog.addEventListener('close',()=>{reactionTarget=null;});
   function renderInbox(){
     $('#messages-list-label').hidden=!conversations.length;
-    list.innerHTML=conversations.length?conversations.map(item=>`<button type="button" class="message-conversation${item.unreadCount?' unread':''}" data-conversation="${escape(item.person.id)}">${avatar(item.person)}<span class="message-conversation-copy"><span class="message-conversation-name"><strong>${escape(item.person.displayName)}</strong><span>@${escape(item.person.handle)}</span></span><small>${escape(item.sentByMe?'Você: ':'')}${escape(item.preview)}</small></span><span class="message-conversation-meta"><time datetime="${escape(item.updatedAt)}" title="${escape(stamp(item.updatedAt))}">${escape(inboxTime(item.updatedAt))}</time>${item.unreadCount?`<span class="message-unread">${item.unreadCount>99?'99+':item.unreadCount}</span>`:''}</span></button>`).join(''):`<div class="empty message-empty">${emptyIcon}<h3>Nenhuma conversa ainda</h3><p>Busque alguém para enviar uma mensagem ou um Ressoa.</p></div>`;
+    list.innerHTML=conversations.length?conversations.map(item=>`<button type="button" class="message-conversation${item.unreadCount?' unread':''}" data-conversation="${escape(item.person.id)}" aria-label="${escape(item.person.displayName+(item.unreadCount?', '+item.unreadCount+' novidades não lidas':''))}">${avatar(item.person)}<span class="message-conversation-copy"><span class="message-conversation-name"><strong>${escape(item.person.displayName)}</strong><span>@${escape(item.person.handle)}</span></span><small>${escape(item.sentByMe?'Você: ':'')}${escape(item.preview)}</small></span><span class="message-conversation-meta"><time datetime="${escape(item.updatedAt)}" title="${escape(stamp(item.updatedAt))}">${escape(inboxTime(item.updatedAt))}</time>${item.unreadCount?`<span class="message-unread" aria-hidden="true">${unreadLabel(item.unreadCount)}</span>`:''}</span></button>`).join(''):`<div class="empty message-empty">${emptyIcon}<h3>Nenhuma conversa ainda</h3><p>Busque alguém para enviar uma mensagem ou um Ressoa.</p></div>`;
     more.hidden=!inboxCursor;
   }
   function ressoaMarkup(message){
@@ -194,17 +197,20 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
       person=data.person;
       renderHeader(person);
       for(const item of items)if(Object.hasOwn(data.reactions||{},item.id)){item.reactions=data.reactions[item.id];reconcileReactions(item,data.summary.version);}
+      for(const item of items)if(Object.hasOwn(data.reactionNotices||{},item.id))item.reactionNotice=data.reactionNotices[item.id];
       data.items.forEach(item=>reconcileReactions(item,data.summary.version));
       const kept=initial?items.filter(item=>item.senderId===account&&!existing.has(item.id)):items;
       const known=new Map(kept.map(item=>[item.id,item]));data.items.forEach(item=>known.set(item.id,item));
       items=[...known.values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
       if(append||initial||items.length<=50)cursor=data.nextCursor;
       if(!append)loadedVersion=data.summary.version;
+      if(initial)pendingRead=data.unreadCount?{user:target,through:data.readCursor,reactionThrough:data.reactionReadCursor}:null;
       updateSummary(data.summary);renderMessages(initial,append);status.textContent='';updatePending();
     }catch(error){if(error.name!=='AbortError'&&token===generation)status.textContent=error.message;}
     finally{if(token===generation){request=null;older.disabled=false;thread.setAttribute('aria-busy','false');}}
   }
   function showInbox(){
+    pendingRead=null;
     if(reactionDialog.open)reactionDialog.close();
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();person=null;items=[];cursor=null;observer.disconnect();visible.clear();
     inbox.hidden=false;chat.hidden=true;back.hidden=true;loadedVersion=inboxVersion;renderHeader();
@@ -213,6 +219,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   }
   async function start(target){
     if(target===self())return;
+    pendingRead=null;
     if(reactionDialog.open)reactionDialog.close();
     if(person)drafts.set(person.id,input.value);stopPreview();resetRequest();searchRequest?.abort();
     const saved=conversationCache.get(target),cached=saved&&Date.now()-saved.savedAt<300000?saved:null;
@@ -231,13 +238,23 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     if(reading||!dialog.open||!person||document.hidden)return;
     const box=thread.getBoundingClientRect(),top=document.elementFromPoint(box.left+box.width/2,box.top+Math.min(40,box.height/2));
     if(!top||!dialog.contains(top))return;
-    const target=person.id,account=owner,ids=items.filter(item=>item.senderId!==account&&!item.readAt&&visible.has(item.id)).slice(0,50).map(item=>item.id);
-    if(!ids.length)return;reading=true;
+    const target=person.id,account=owner,epoch=cacheEpoch,opening=pendingRead?.user===target?pendingRead:null;
+    const ids=items.filter(item=>item.senderId!==account&&!item.readAt&&visible.has(item.id)).slice(0,50).map(item=>item.id);
+    const reactionReceipts=items.filter(item=>item.reactionNotice&&visible.has(item.id)).slice(0,50).map(item=>({messageId:item.id,createdAt:item.reactionNotice}));
+    if((!opening&&!ids.length&&!reactionReceipts.length)||!visible.size)return;reading=true;
+    const known=items.map(item=>({id:item.id,notice:item.reactionNotice}));
     try{
-      const data=await api('/api/messages/read',{method:'POST',body:{user:target,ids}});
-      if(account!==self())return;updateSummary(data.summary);
-      if(person?.id===target)items.forEach(item=>{if(ids.includes(item.id))item.readAt=new Date().toISOString();});
-      const cached=conversationCache.get(target);cached?.items.forEach(item=>{if(ids.includes(item.id))item.readAt=new Date().toISOString();});
+      const data=await api('/api/messages/read',{method:'POST',body:{user:target,ids,reactionReceipts,...(opening?{through:opening.through,reactionThrough:opening.reactionThrough}:{})}});
+      if(account!==self()||epoch!==cacheEpoch)return;updateSummary(data.summary);
+      if(pendingRead===opening)pendingRead=null;
+      const mark=item=>{const previous=known.find(value=>value.id===item.id);if(!previous)return;
+        if(item.senderId!==account&&(opening?.through||ids.includes(item.id)))item.readAt=new Date().toISOString();
+        if(item.reactionNotice===previous.notice&&(opening?.reactionThrough||reactionReceipts.some(value=>value.messageId===item.id&&value.createdAt===item.reactionNotice)))item.reactionNotice=null;};
+      if(person?.id===target)items.forEach(mark);
+      const cached=conversationCache.get(target);cached?.items.forEach(mark);if(cached)cached.unreadCount=data.unreadCount;
+      const conversation=conversations.find(item=>item.person.id===target);if(conversation)conversation.unreadCount=data.unreadCount;
+      readCounts.set(target,{version:data.summary.version,count:data.unreadCount});
+      if(readCounts.size>100)readCounts.delete(readCounts.keys().next().value);
       inboxVersion=-1;
     }catch{}finally{reading=false;}
   }
@@ -301,7 +318,7 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
   list.addEventListener('click',event=>{const item=event.target.closest('[data-conversation]');if(item)void start(item.dataset.conversation);});
   button.addEventListener('click',()=>{pendingPost=null;pendingShareId=null;if(!dialog.open)dialog.showModal();showInbox();});
   back.addEventListener('click',showInbox);more.addEventListener('click',()=>void loadInbox(true));older.addEventListener('click',()=>void loadConversation(true));
-  dialog.addEventListener('close',()=>{if(reactionDialog.open)reactionDialog.close();stopPreview();resetRequest();searchRequest?.abort();clearTimeout(searchTimer);clearTimeout(readTimer);observer.disconnect();visible.clear();if(person)drafts.set(person.id,input.value);});
+  dialog.addEventListener('close',()=>{pendingRead=null;if(reactionDialog.open)reactionDialog.close();stopPreview();resetRequest();searchRequest?.abort();clearTimeout(searchTimer);clearTimeout(readTimer);observer.disconnect();visible.clear();if(person)drafts.set(person.id,input.value);});
   async function poll(force=false){
     if(document.hidden||polling||request||(!force&&!dialog.open&&Date.now()-lastPoll<8000))return;
     polling=true;lastPoll=Date.now();const account=owner;
@@ -322,6 +339,8 @@ export function createMessages({ toast, stopPreview, onCompose, onPlay, onOpenPo
     conversationJobs.forEach(job=>job.controller.abort());conversationJobs.clear();
     person=null;items=[];conversations=[];conversationCache.clear();drafts.clear();thread.replaceChildren();list.replaceChildren();
     reactionJobs.clear();reactionChanges.clear();
+    readCounts.clear();
+    pendingRead=null;
     inboxLoaded=false;inboxVersion=-1;loadedVersion=-1;pendingPost=null;submission=null;summary={version:-1,unreadCount:0};updateSummary(summary);
   }
   window.addEventListener('sessionexpired',clearMemory);

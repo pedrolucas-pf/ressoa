@@ -1059,7 +1059,7 @@ function peopleIdentity(person) {
  return `<a class="person-link person-identity" href="${escape(personHref(person.id))}" data-person="${escape(person.id)}">${profileAvatar(person.photo,person.displayName)}<span>${escape(person.displayName)}<small>@${escape(person.handle)}</small></span></a>`;
 }
 const comments=createComments({identity:peopleIdentity,toast,stopPreview});
-const messages=createMessages({toast,stopPreview,onCompose:person=>openComposer(null,person),onPlay:toggleCoverPlayer,onOpenPost:id=>{location.hash='#ressoa/'+encodeURIComponent(id);},onNotifications:()=>notifications.check()});
+const messages=createMessages({toast,stopPreview,onCompose:person=>openComposer(null,person),onPlay:toggleCoverPlayer,onOpenPost:id=>{location.hash='#ressoa/'+encodeURIComponent(id);}});
 document.addEventListener('click',event=>{
  const person=event.target.closest('[data-message-user]');if(person)void messages.open(person.dataset.messageUser);
  const post=event.target.closest('[data-message-post]');if(post){$('#reader').close();messages.share(post.dataset.messagePost);}
@@ -1068,7 +1068,6 @@ document.addEventListener('click',event=>{const button=event.target.closest('[da
 const notifications=createNotifications({
  identity:peopleIdentity,toast,
  onComment:id=>comments.open(id),
- onMessage:id=>messages.open(id),
  onResponse:()=>{if(page==='perfil'&&!visitedId)renderProfile();},
  onFollowChange:()=>{if(page==='perfil'&&visitedId)void loadVisitedProfile();else void refreshView();},
  followButton:person=>`<button type="button" class="button" data-follow-back data-follow="${escape(person.id)}" data-private="${Boolean(person.isPrivate)}" ${pendingAttributes('follow',person.id)} aria-pressed="${hasFollow(person.id)}">${hasFollow(person.id)?followLabel(person.id,person.isPrivate):'Seguir de volta'}</button>`
